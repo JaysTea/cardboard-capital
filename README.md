@@ -6,6 +6,8 @@ Like a stock portfolio, you don't actually have the money; you just know that's 
 
 It currently supports **Magic: The Gathering** (card data and prices from [Scryfall](https://scryfall.com)). More TCGs are planned.
 
+*Having some fun with Vibe-Coding this Project*
+
 ## Download
 
 | | |
