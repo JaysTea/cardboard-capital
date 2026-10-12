@@ -39,7 +39,9 @@ pub enum Job {
     RefreshPrices {
         ids: Vec<String>,
     },
-    FetchFx,
+    FetchFx {
+        currency: String,
+    },
     Import {
         seq: u64,
         source: ImportSource,
@@ -182,7 +184,7 @@ fn run_job(client: &Client, job: Job) -> Reply {
             Reply::Search { seq, result }
         }
         Job::RefreshPrices { ids } => Reply::Prices(client.cards_by_id(&ids)),
-        Job::FetchFx => Reply::Fx(fx::fetch_usd_sgd(client.agent())),
+        Job::FetchFx { currency } => Reply::Fx(fx::fetch_rate(client.agent(), &currency)),
         Job::Import { seq, source, opts } => Reply::Import {
             seq,
             result: import::run(client, source, opts),

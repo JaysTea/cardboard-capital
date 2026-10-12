@@ -2,7 +2,7 @@
 
 **Know what your cardboard is worth, on paper.**
 
-Like a stock portfolio, you don't actually have the money; you just know that's where it's at. Cardboard Capital tracks your trading card collection, checks each card against live market prices, converts them to SGD, and keeps a tidy spreadsheet you can open in Google Sheets, Excel or LibreOffice.
+Like a stock portfolio, you don't actually have the money; you just know that's where it's at. Cardboard Capital tracks your trading card collection, checks each card against live market prices, converts them to your currency (SGD, USD, EUR, GBP, JPY and 21 more), and keeps a tidy spreadsheet you can open in Google Sheets, Excel or LibreOffice.
 
 It currently supports **Magic: The Gathering** (card data and prices from [Scryfall](https://scryfall.com)). More TCGs are planned.
 
@@ -76,8 +76,8 @@ The app checks GitHub for new versions when it starts. Pick your channel in **Se
 When an update is available, a button appears in the header. **Install & restart** swaps in the new version; your `data` and `exports` are left alone. Switching from Beta back to Stable doesn't downgrade you: you move to the next stable release once it's newer. For an older version, download it from [Releases](https://github.com/JaysTea/cardboard-capital/releases).
 
 ### Prices
-- Prices are Scryfall's **USD (TCGplayer market)** price for each card's finish, converted to SGD with a **live exchange rate** (Frankfurter/ECB, falling back to ExchangeRate-API). A manual rate can be set in Settings.
-- If a price looks wrong, type your own in **Manual S$** in the Collection tab. Tick ✔ once you've cross-checked a row.
+- Prices are Scryfall's **USD (TCGplayer market)** price for each card's finish, converted to **your currency** with a **live exchange rate** (Frankfurter/ECB, falling back to ExchangeRate-API). Pick the currency in **Settings → Currency**; switching converts your manual prices too. A manual rate can also be set there.
+- If a price looks wrong, type your own in the **Manual** column in the Collection tab. Tick ✔ once you've cross-checked a row.
 - **Refresh prices** re-fetches everything.
 
 ### The spreadsheet
@@ -86,7 +86,7 @@ When an update is available, a button appears in the header. **Install & restart
 - **Collection sheet:** filters on every column; colour-coded rarities; foil rows tinted; valuable rows highlighted; Scryfall and TCGplayer links; dropdowns for Condition, Finish and Checked.
 - **Summary sheet:** the exchange rate in `B4`, plus totals and breakdowns by rarity, finish, condition and set.
 
-The S$ columns are formulas, so changing `Summary!B4` or a Manual S$ value reprices the whole sheet. In Google Sheets, use *File → Import → Upload*.
+The price columns (labelled with your currency, e.g. "Unit (SGD)") are formulas, so changing `Summary!B4` or a Manual value reprices the whole sheet. In Google Sheets, use *File → Import → Upload*.
 
 > The sheet is regenerated from the app's data, so edits made in the spreadsheet aren't read back. Make lasting changes in the app.
 
@@ -111,6 +111,7 @@ Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: inst
 | Beta of an upcoming version | pre-release suffix | 1.2.0-beta.1 → 1.2.0-beta.2 → 1.2.0 |
 
 **History**
+- **v1.2.0-beta.2:** choose your currency (26 supported); manual prices and imported sheets are converted automatically.
 - **v1.2.0-beta.1:** in-app update checks with Stable / Beta / Off channels; import another install's spreadsheet; choose the spreadsheet folder; Save copy as….
 - **v1.1.0:** first public release as Cardboard Capital. Includes the tidy `data\`/`exports\` folder layout, import from Archidekt links and pasted lists, and fast keyboard entry.
 - v1.0.x: private builds as "MTG Stock Sheet".
@@ -148,7 +149,7 @@ git push origin main v1.2.0
 |---|---|
 | `src/scryfall.rs` | API client (rate-limited), card model, treatment detection, price per finish |
 | `src/import.rs` | Deck link (Archidekt/Moxfield) and text list parsing, Scryfall matching |
-| `src/fx.rs` | USD→SGD rate |
+| `src/fx.rs` | USD → your currency exchange rate |
 | `src/model.rs` | Collection entries, merging, settings |
 | `src/storage.rs` | Folder layout, migration, JSON persistence |
 | `src/update.rs` | GitHub release checks per channel, self-update |

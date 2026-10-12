@@ -11,7 +11,7 @@ use rust_xlsxwriter::{
 
 use crate::model::{rarity_label, Condition, Entry, Finish, Settings};
 
-/// Summary!B4 holds the USD->SGD rate; every S$ formula points at it.
+/// Summary!B4 holds the USD -> currency rate; every converted price formula points at it.
 const FX_CELL: &str = "Summary!$B$4";
 
 const HEADERS: [(&str, f64); 22] = [
@@ -27,9 +27,9 @@ const HEADERS: [(&str, f64); 22] = [
     ("Type", 30.0),
     ("Qty", 6.0),
     ("USD (Scryfall)", 13.0),
-    ("Manual S$", 11.0),
-    ("Unit S$", 11.0),
-    ("Total S$", 12.0),
+    ("Manual", 13.0),
+    ("Unit", 13.0),
+    ("Total", 14.0),
     ("Price Source", 12.0),
     ("Checked", 9.0),
     ("Price Updated", 16.0),
@@ -53,7 +53,6 @@ const C_NOTES: u16 = 20;
 const C_ID: u16 = 21;
 
 const USD_FMT: &str = "\"$\"#,##0.00";
-const SGD_FMT: &str = "\"S$\"#,##0.00";
 
 pub fn export(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), String> {
     build(path, entries, settings).map_err(|e| match e {
@@ -83,6 +82,8 @@ fn base() -> Format {
 }
 
 fn build(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), XlsxError> {
+    let cur = settings.currency();
+    let money_fmt = cur.excel_format();
     let rate = settings.rate();
     let mut workbook = Workbook::new();
     let mut ws = Worksheet::new();
@@ -100,10 +101,10 @@ fn build(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), Xlsx
     let name_fmt = base().set_bold();
     let center = base().set_align(FormatAlign::Center);
     let usd = base().set_num_format(USD_FMT);
-    let sgd = base().set_num_format(SGD_FMT);
-    let sgd_bold = base().set_num_format(SGD_FMT).set_bold();
+    let sgd = base().set_num_format(money_fmt.as_str());
+    let sgd_bold = base().set_num_format(money_fmt.as_str()).set_bold();
     let manual = base()
-        .set_num_format(SGD_FMT)
+        .set_num_format(money_fmt.as_str())
         .set_font_color(Color::RGB(0x1D4ED8));
     let link = base()
         .set_font_color(Color::RGB(0x2563EB))
@@ -111,7 +112,12 @@ fn build(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), Xlsx
     let muted = base().set_font_color(Color::RGB(0x6B7280));
 
     for (col, (title, width)) in HEADERS.iter().enumerate() {
-        ws.write_string_with_format(0, col as u16, *title, &header)?;
+        // Price columns carry the currency code, e.g. "Unit (SGD)", so imports know what they're in.
+        let title = match col as u16 {
+            C_MANUAL | C_UNIT | C_TOTAL => format!("{title} ({})", cur.code),
+            _ => title.to_string(),
+        };
+        ws.write_string_with_format(0, col as u16, title, &header)?;
         ws.set_column_width(col as u16, *width)?;
     }
     ws.set_row_height(0, 24)?;
@@ -151,19 +157,19 @@ fn build(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), Xlsx
             Some(v) => ws.write_number_with_format(r, C_USD, v, &usd)?,
             None => ws.write_blank(r, C_USD, &usd)?,
         };
-        match e.manual_sgd {
+        match e.manual_price {
             Some(v) => ws.write_number_with_format(r, C_MANUAL, v, &manual)?,
             None => ws.write_blank(r, C_MANUAL, &manual)?,
         };
 
-        let unit = e.unit_sgd(rate);
+        let unit = e.unit_price(rate);
         let unit_formula = Formula::new(format!(
             "=IF(M{n}<>\"\",M{n},IF(L{n}<>\"\",L{n}*{FX_CELL},\"\"))"
         ))
         .set_result(unit.map(|u| format!("{u}")).unwrap_or_default());
         ws.write_formula_with_format(r, C_UNIT, unit_formula, &sgd)?;
         let total_formula = Formula::new(format!("=IF(N{n}=\"\",\"\",N{n}*K{n})")).set_result(
-            e.total_sgd(rate)
+            e.total_price(rate)
                 .map(|t| format!("{t}"))
                 .unwrap_or_default(),
         );
@@ -215,7 +221,7 @@ fn build(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), Xlsx
     let band = Format::new().set_background_color(Color::RGB(0xF7F9FC));
     let rules = [
         (
-            format!("=AND(ISNUMBER($O2),$O2>={})", settings.highlight_sgd),
+            format!("=AND(ISNUMBER($O2),$O2>={})", settings.highlight_value),
             &high,
         ),
         ("=$F2<>\"Non-foil\"".to_string(), &foil),
@@ -247,6 +253,8 @@ fn build(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), Xlsx
 }
 
 fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, XlsxError> {
+    let cur = settings.currency();
+    let money_fmt = cur.excel_format();
     let rate = settings.rate();
     let n = entries.len().max(1) + 1; // last data row (1-based) on Collection
     let mut ws = Worksheet::new();
@@ -270,9 +278,9 @@ fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, X
         .set_background_color(Color::RGB(0xFEF3C7))
         .set_border(FormatBorder::Thin);
     let int = Format::new().set_num_format("#,##0");
-    let sgd = Format::new().set_num_format(SGD_FMT);
+    let sgd = Format::new().set_num_format(money_fmt.as_str());
     let sgd_big = Format::new()
-        .set_num_format(SGD_FMT)
+        .set_num_format(money_fmt.as_str())
         .set_bold()
         .set_font_size(14);
     let usd = Format::new().set_num_format(USD_FMT);
@@ -289,7 +297,7 @@ fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, X
         &note,
     )?;
 
-    ws.write_string_with_format(3, 0, "USD → SGD rate", &label)?;
+    ws.write_string_with_format(3, 0, format!("USD → {} rate", cur.code), &label)?;
     ws.write_number_with_format(3, 1, rate, &rate_fmt)?;
     let src = if settings.fx_manual {
         "Manual rate".to_string()
@@ -297,19 +305,20 @@ fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, X
         format!("{} · {}", settings.fx_source, settings.fx_updated)
     };
     ws.write_string_with_format(3, 2, src, &note)?;
-    ws.write_string_with_format(4, 0, "Change B4 to reprice every S$ cell.", &note)?;
+    ws.write_string_with_format(4, 0, format!("Change B4 to reprice every {} cell.", cur.code), &note)?;
 
     let total_qty: u32 = entries.iter().map(|e| e.qty).sum();
-    let total_sgd: f64 = entries.iter().filter_map(|e| e.total_sgd(rate)).sum();
+    let total_price: f64 = entries.iter().filter_map(|e| e.total_price(rate)).sum();
     let total_usd: f64 = entries
         .iter()
         .filter_map(|e| e.usd.map(|u| u * e.qty as f64))
         .sum();
     let missing = entries
         .iter()
-        .filter(|e| e.unit_sgd(rate).is_none())
+        .filter(|e| e.unit_price(rate).is_none())
         .count();
 
+    let total_label = format!("Total value ({})", cur.code);
     let rows: [(&str, String, String, &Format); 5] = [
         (
             "Unique entries",
@@ -324,9 +333,9 @@ fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, X
             &int,
         ),
         (
-            "Total value (S$)",
+            total_label.as_str(),
             format!("=SUM(Collection!O2:O{n})"),
-            total_sgd.to_string(),
+            total_price.to_string(),
             &sgd_big,
         ),
         (
@@ -362,7 +371,7 @@ fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, X
      -> Result<(), XlsxError> {
         ws.write_string_with_format(row, 0, heading, &head)?;
         ws.write_string_with_format(row, 1, "Cards", &head)?;
-        ws.write_string_with_format(row, 2, "Value S$", &head)?;
+        ws.write_string_with_format(row, 2, format!("Value ({})", cur.code), &head)?;
         row += 1;
         for (key, qty, value) in groups {
             ws.write_string(row, 0, &key)?;
@@ -392,7 +401,7 @@ fn summary_sheet(entries: &[&Entry], settings: &Settings) -> Result<Worksheet, X
         for e in entries {
             let slot = map.entry(key_of(e)).or_default();
             slot.0 += e.qty;
-            slot.1 += e.total_sgd(rate).unwrap_or(0.0);
+            slot.1 += e.total_price(rate).unwrap_or(0.0);
         }
         let mut v: Vec<_> = map.into_iter().map(|(k, (q, s))| (k, q, s)).collect();
         v.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
@@ -451,7 +460,7 @@ mod tests {
             let mut e = Entry::from_card(&card, finish, cond, qty);
             e.uid = i as u64 + 1;
             if i == 3 {
-                e.manual_sgd = Some(6.5);
+                e.manual_price = Some(6.5);
             }
             add_or_merge(&mut entries, e);
         }
@@ -486,7 +495,7 @@ mod tests {
                 name: "Opt".into(),
                 rarity: "common".into(),
                 qty: 4,
-                manual_sgd: Some(0.5),
+                manual_price: Some(0.5),
                 ..Default::default()
             },
         ];

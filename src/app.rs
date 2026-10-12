@@ -86,6 +86,8 @@ pub struct App {
     pub update: UpdateState,
     pub toasts: Vec<Toast>,
     pub fx_loading: bool,
+    /// Currency being switched to while its rate is fetched.
+    pub pending_currency: Option<String>,
     pub refresh_loading: bool,
     next_uid: u64,
     /// Time of the first unsaved edit (edits are debounced before saving).
@@ -135,6 +137,7 @@ impl App {
             update: UpdateState::default(),
             toasts: Vec::new(),
             fx_loading: false,
+            pending_currency: None,
             refresh_loading: false,
             next_uid,
             dirty_since: None,
@@ -231,7 +234,77 @@ impl App {
 
     pub fn fetch_fx(&mut self) {
         self.fx_loading = true;
-        let _ = self.worker.jobs.send(Job::FetchFx);
+        let currency = self.settings.currency.clone();
+        let _ = self.worker.jobs.send(Job::FetchFx { currency });
+    }
+
+    /// Starts switching to another currency. The switch happens once its rate arrives,
+    /// so manual prices can be converted at real rates.
+    pub fn change_currency(&mut self, code: &str) {
+        if code == self.settings.currency {
+            self.pending_currency = None;
+            return;
+        }
+        self.pending_currency = Some(code.to_string());
+        self.fx_loading = true;
+        let _ = self.worker.jobs.send(Job::FetchFx {
+            currency: code.to_string(),
+        });
+    }
+
+    fn on_fx(&mut self, result: Result<crate::fx::FxQuote, String>) {
+        self.fx_loading = false;
+        let switching = self.pending_currency.take();
+        match result {
+            Ok(q) if switching.as_deref() == Some(q.currency.as_str()) => {
+                let old = self.settings.currency();
+                let old_rate = self.rate();
+                let factor = if old_rate > 0.0 { q.rate / old_rate } else { 1.0 };
+                let mut converted = 0;
+                for e in &mut self.collection {
+                    if let Some(m) = e.manual_price.as_mut() {
+                        *m = (*m * factor * 100.0).round() / 100.0;
+                        converted += 1;
+                    }
+                }
+                self.settings.highlight_value = (self.settings.highlight_value * factor).round();
+                self.settings.currency = q.currency.clone();
+                self.settings.fx_manual = false;
+                self.settings.fx_manual_rate = q.rate;
+                self.apply_quote(q);
+                self.coll.invalidate_buffers();
+                self.save_now();
+                let new = self.settings.currency();
+                let mut msg = format!("Prices are now shown in {} ({}).", new.name, new.code);
+                if converted > 0 {
+                    msg += &format!(" Converted {converted} manual prices from {}.", old.code);
+                }
+                self.toast(ToastKind::Success, msg);
+            }
+            Ok(q) if q.currency == self.settings.currency => self.apply_quote(q),
+            Ok(_) => {} // a reply for a currency we're no longer using
+            Err(e) => {
+                let msg = match switching {
+                    Some(code) => format!("Couldn't switch to {code}: no exchange rate available. {e}"),
+                    None => format!(
+                        "Couldn't fetch the live USD→{} rate, using the last known one. {e}",
+                        self.settings.currency
+                    ),
+                };
+                self.toast(ToastKind::Error, msg);
+            }
+        }
+    }
+
+    fn apply_quote(&mut self, q: crate::fx::FxQuote) {
+        self.settings.fx_rate = q.rate;
+        self.settings.fx_updated = model::now_string();
+        self.settings.fx_source = if q.date.is_empty() {
+            q.source
+        } else {
+            format!("{} ({})", q.source, q.date)
+        };
+        self.save_settings();
     }
 
     pub fn refresh_prices(&mut self) {
@@ -343,25 +416,7 @@ impl App {
                 Reply::Update { manual, result } => ui::update::on_checked(self, manual, result),
                 Reply::Installed(result) => ui::update::on_installed(self, ctx, result),
                 Reply::Image { url, result } => self.images.loaded(ctx, url, result),
-                Reply::Fx(result) => {
-                    self.fx_loading = false;
-                    match result {
-                        Ok(q) => {
-                            self.settings.fx_rate = q.rate;
-                            self.settings.fx_updated = model::now_string();
-                            self.settings.fx_source = if q.date.is_empty() {
-                                q.source
-                            } else {
-                                format!("{} ({})", q.source, q.date)
-                            };
-                            self.save_settings();
-                        }
-                        Err(e) => self.toast(
-                            ToastKind::Error,
-                            format!("Couldn't fetch the live USD→SGD rate, using the last known one. {e}"),
-                        ),
-                    }
-                }
+                Reply::Fx(result) => self.on_fx(result),
                 Reply::Prices(result) => {
                     self.refresh_loading = false;
                     match result {
@@ -397,6 +452,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        model::set_display_currency(&self.settings.currency);
         if self.applied_dark != Some(self.settings.dark_mode) {
             widgets::apply_theme(ctx, self.settings.dark_mode);
             self.applied_dark = Some(self.settings.dark_mode);

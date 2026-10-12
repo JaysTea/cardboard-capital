@@ -5,7 +5,7 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::app::{App, Tab};
 use crate::import::{ImportOptions, ImportResult, ImportSource};
-use crate::model::{money, Condition, Entry, Finish};
+use crate::model::{Condition, Entry, Finish};
 use crate::scryfall::price_usd;
 use crate::ui::widgets::{self, bold, ToastKind, ACCENT, CARD_ASPECT};
 use crate::worker::Job;
@@ -266,12 +266,19 @@ fn start_import(app: &mut App) {
 }
 
 /// The collection entry for an import row, carrying over details from a spreadsheet import.
-fn entry_for(card: &crate::scryfall::Card, row: &crate::import::ImportRow, default_condition: Condition) -> Entry {
+/// `currency`/`rate`: the user's currency and its USD rate, for converting a sheet's manual prices.
+fn entry_for(
+    card: &crate::scryfall::Card,
+    row: &crate::import::ImportRow,
+    default_condition: Condition,
+    currency: &str,
+    rate: f64,
+) -> Entry {
     let extras = row.line.extras.as_ref();
     let condition = extras.and_then(|x| x.condition).unwrap_or(default_condition);
     let mut e = Entry::from_card(card, row.finish, condition, row.qty);
     if let Some(x) = extras {
-        e.manual_sgd = x.manual_sgd;
+        e.manual_price = convert_manual(x, currency, rate);
         e.notes = x.notes.clone();
         e.checked = x.checked;
         // The sheet shows the override if there was one; keep it only if it differs from auto-detection.
@@ -287,12 +294,14 @@ fn add_rows(app: &mut App) {
         return;
     };
     let condition = app.import.condition;
+    let currency = app.settings.currency.clone();
+    let rate = app.rate();
     let mut entries = Vec::new();
     let mut cards = 0;
     result.rows.retain(|row| {
         let take = row.include && row.card.is_some();
         if let (true, Some(card)) = (take, &row.card) {
-            entries.push(entry_for(card, row, condition));
+            entries.push(entry_for(card, row, condition, &currency, rate));
             cards += row.qty;
         }
         !take
@@ -402,7 +411,7 @@ fn results(app: &mut App, ui: &mut Ui, rate: f64, add: &mut bool, lookup: &mut O
     });
     ui.horizontal(|ui| {
         ui.label(format!("Selected: {sel_cards} cards · "));
-        ui.label(bold(format!("S$ {}", money(sel_value))).color(ACCENT));
+        ui.label(bold(crate::model::cur().fmt(sel_value)).color(ACCENT));
         if problems > 0 {
             ui.label(
                 RichText::new(format!(
@@ -429,8 +438,10 @@ fn results(app: &mut App, ui: &mut Ui, rate: f64, add: &mut bool, lookup: &mut O
         .column(Column::initial(74.0))
         .column(Column::remainder().at_least(220.0).clip(true))
         .header(28.0, |mut h| {
+            let sym = crate::model::cur().symbol;
+            let (unit_h, total_h) = (format!("Unit {sym}"), format!("Total {sym}"));
             for t in [
-                "", "Qty", "Name", "Set", "#", "Finish", "Unit S$", "Total S$", "Check",
+                "", "Qty", "Name", "Set", "#", "Finish", unit_h.as_str(), total_h.as_str(), "Check",
             ] {
                 h.col(|ui| {
                     ui.label(bold(t));
@@ -512,11 +523,11 @@ fn results(app: &mut App, ui: &mut Ui, rate: f64, add: &mut bool, lookup: &mut O
                     .and_then(|c| price_usd(c, r.finish))
                     .map(|u| u * rate);
                 row.col(|ui| {
-                    ui.label(unit.map(money).unwrap_or_else(|| "—".into()));
+                    ui.label(unit.map(|v| crate::model::cur().amount(v)).unwrap_or_else(|| "—".into()));
                 });
                 row.col(|ui| {
                     ui.label(bold(
-                        unit.map(|u| money(u * r.qty as f64))
+                        unit.map(|u| crate::model::cur().amount(u * r.qty as f64))
                             .unwrap_or_else(|| "—".into()),
                     ));
                 });
@@ -557,4 +568,37 @@ fn results(app: &mut App, ui: &mut Ui, rate: f64, add: &mut bool, lookup: &mut O
                 });
             });
         });
+}
+
+/// A spreadsheet's manual price in the user's currency. Sheets in another currency are converted
+/// through USD using the sheet's own rate; if that's missing the manual price is dropped
+/// (the Scryfall price is used instead).
+fn convert_manual(x: &crate::import::SheetExtras, currency: &str, rate: f64) -> Option<f64> {
+    let price = x.manual_price?;
+    if x.currency.eq_ignore_ascii_case(currency) {
+        return Some(price);
+    }
+    let from_rate = x.usd_rate?;
+    Some((price / from_rate * rate * 100.0).round() / 100.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::import::SheetExtras;
+
+    #[test]
+    fn manual_prices_convert_between_currencies() {
+        let x = SheetExtras {
+            manual_price: Some(13.0),
+            currency: "SGD".into(),
+            usd_rate: Some(1.3),
+            ..Default::default()
+        };
+        assert_eq!(convert_manual(&x, "SGD", 1.3), Some(13.0));
+        // S$13 at 1.3 = US$10 -> €9 at 0.9
+        assert_eq!(convert_manual(&x, "EUR", 0.9), Some(9.0));
+        let no_rate = SheetExtras { usd_rate: None, ..x };
+        assert_eq!(convert_manual(&no_rate, "EUR", 0.9), None);
+    }
 }

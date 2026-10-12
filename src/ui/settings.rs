@@ -29,6 +29,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let mut open_sheet = false;
     let mut refresh = false;
     let mut new_export_dir: Option<Option<std::path::PathBuf>> = None;
+    let mut new_currency: Option<&'static str> = None;
 
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -37,11 +38,43 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             let data_dir = app.data_dir.clone();
             let app_dir = app.app_dir.clone();
             let fx_loading = app.fx_loading;
+            let pending = app.pending_currency.clone();
             let s = &mut app.settings;
 
-            section(ui, "Currency (USD → SGD)", |ui| {
+            let cur = s.currency();
+            section(ui, "Currency", |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(bold(format!("Live rate: 1 USD = S$ {:.4}", s.fx_rate)));
+                    ui.label("Show prices in");
+                    egui::ComboBox::from_id_salt("currency")
+                        .selected_text(format!("{} – {}", cur.code, cur.name))
+                        .width(230.0)
+                        .height(420.0)
+                        .show_ui(ui, |ui| {
+                            for c in crate::model::CURRENCIES {
+                                if ui
+                                    .selectable_label(c.code == cur.code, format!("{} – {} ({})", c.code, c.name, c.symbol))
+                                    .clicked()
+                                {
+                                    new_currency = Some(c.code);
+                                }
+                            }
+                        });
+                    if pending.is_some() {
+                        ui.spinner();
+                        ui.label(RichText::new("Switching…").weak());
+                    }
+                });
+                ui.label(
+                    RichText::new(
+                        "Prices come from Scryfall in US dollars (TCGplayer market) and are converted at a live rate. \
+                         Switching converts your manual prices too.",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(bold(format!("Live rate: 1 USD = {} {:.4}", cur.symbol, s.fx_rate)));
                     if fx_loading {
                         ui.spinner();
                     } else if ui.button("🔄 Refresh").clicked() {
@@ -65,9 +98,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             .add(
                                 egui::DragValue::new(&mut s.fx_manual_rate)
                                     .speed(0.001)
-                                    .range(0.1..=10.0)
+                                    .range(0.0001..=100000.0)
                                     .fixed_decimals(4)
-                                    .prefix("S$ "),
+                                    .prefix(format!("{} ", cur.symbol)),
                             )
                             .changed()
                         {
@@ -78,8 +111,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
                 ui.label(
                     RichText::new(
-                        "Prices come from Scryfall in USD (TCGplayer market price) and are converted with this rate. \
-                         The rate is also written into the spreadsheet (Summary!B4), so you can change it there too.",
+                        "The rate is also written into the spreadsheet (Summary!B4), so you can change it there too.",
                     )
                     .small()
                     .weak(),
@@ -115,7 +147,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label("Highlight rows worth at least");
                     if ui
-                        .add(egui::DragValue::new(&mut s.highlight_sgd).speed(0.5).range(0.0..=100000.0).prefix("S$ "))
+                        .add(egui::DragValue::new(&mut s.highlight_value).speed(0.5).range(0.0..=100000000.0).prefix(format!("{} ", cur.symbol)))
                         .changed()
                     {
                         settings_changed = true;
@@ -208,6 +240,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     if let Some(dir) = new_export_dir {
         app.set_export_dir(dir);
+    }
+    if let Some(code) = new_currency {
+        app.change_currency(code);
     }
 }
 

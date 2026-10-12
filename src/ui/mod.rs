@@ -8,7 +8,7 @@ pub mod widgets;
 use egui::{Align, Layout, RichText};
 
 use crate::app::{App, Tab};
-use crate::model::money;
+
 use widgets::{bold, chip, ACCENT};
 
 pub fn header(app: &mut App, ctx: &egui::Context) {
@@ -17,7 +17,7 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
     let total: f64 = app
         .collection
         .iter()
-        .filter_map(|e| e.total_sgd(rate))
+        .filter_map(|e| e.total_price(rate))
         .sum();
 
     egui::TopBottomPanel::top("header")
@@ -51,7 +51,7 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .add_enabled(!app.fx_loading, egui::Button::new("🔄"))
-                        .on_hover_text("Refresh the live USD→SGD rate")
+                        .on_hover_text("Refresh the live exchange rate")
                         .clicked()
                     {
                         app.fetch_fx();
@@ -67,13 +67,13 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
                             app.settings.fx_source, app.settings.fx_updated
                         )
                     };
-                    ui.label(bold(format!("1 USD = S$ {rate:.4}")))
+                    ui.label(bold(format!("1 USD = {} {rate:.4}", crate::model::cur().symbol)))
                         .on_hover_text(hover);
                     if app.settings.fx_manual {
                         chip(ui, "MANUAL", ACCENT, ACCENT.gamma_multiply(0.2));
                     }
                     ui.separator();
-                    ui.label(format!("{total_qty} cards · S$ {}", money(total)));
+                    ui.label(format!("{total_qty} cards · {}", crate::model::cur().fmt(total)));
                     if app.update.available.is_some() {
                         ui.separator();
                         update::header_chip(app, ui);

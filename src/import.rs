@@ -34,11 +34,15 @@ pub struct ImportLine {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SheetExtras {
     pub condition: Option<Condition>,
-    pub manual_sgd: Option<f64>,
+    pub manual_price: Option<f64>,
     pub notes: String,
     pub checked: bool,
     /// As shown in the sheet (an override or the auto-detected label).
     pub treatment: String,
+    /// Currency the sheet's manual prices are in ("SGD" for sheets from before currencies).
+    pub currency: String,
+    /// The sheet's USD -> `currency` rate (Summary!B4), used to convert manual prices.
+    pub usd_rate: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -334,7 +338,19 @@ pub fn parse_sheet(path: &std::path::Path) -> Result<Vec<ImportLine>, String> {
             .into());
     }
     let (c_qty, c_finish, c_cond) = (col("Qty"), col("Finish"), col("Condition"));
-    let (c_manual, c_notes, c_checked, c_treat) = (col("Manual S$"), col("Notes"), col("Checked"), col("Treatment"));
+    // "Manual (EUR)" since currencies were added; "Manual S$" (SGD) before that.
+    let c_manual = header.iter().position(|h| h.to_lowercase().starts_with("manual"));
+    let sheet_currency = c_manual
+        .map(|i| header[i].as_str())
+        .and_then(|h| h.split_once('(').map(|(_, rest)| rest.trim_end_matches(')').trim().to_uppercase()))
+        .filter(|code| code.len() == 3)
+        .unwrap_or_else(|| "SGD".into());
+    let usd_rate = wb
+        .worksheet_range("Summary")
+        .ok()
+        .and_then(|r| r.get_value((3, 1)).and_then(cell_number))
+        .filter(|r| *r > 0.0);
+    let (c_notes, c_checked, c_treat) = (col("Notes"), col("Checked"), col("Treatment"));
 
     let mut lines = Vec::new();
     for row in rows {
@@ -363,10 +379,12 @@ pub fn parse_sheet(path: &std::path::Path) -> Result<Vec<ImportLine>, String> {
             raw: String::new(),
             extras: Some(SheetExtras {
                 condition: Condition::ALL.into_iter().find(|c| c.label().eq_ignore_ascii_case(&cond_text)),
-                manual_sgd: c_manual.and_then(|i| row.get(i)).and_then(cell_number),
+                manual_price: c_manual.and_then(|i| row.get(i)).and_then(cell_number),
                 notes: text(c_notes),
                 checked: text(c_checked).eq_ignore_ascii_case("yes"),
                 treatment: text(c_treat),
+                currency: sheet_currency.clone(),
+                usd_rate,
             }),
         });
     }
@@ -799,7 +817,7 @@ mod tests {
                 condition: Condition::LP,
                 qty: 3,
                 usd: Some(10.0),
-                manual_sgd: Some(99.5),
+                manual_price: Some(99.5),
                 notes: "binder 2".into(),
                 checked: true,
                 treatment: "Normal".into(),
@@ -826,16 +844,36 @@ mod tests {
         // Export sorts by name: Opt first.
         let opt = &lines[0];
         assert_eq!((opt.scryfall_id.as_deref(), opt.qty, opt.finish), (Some("id-opt"), 1, Some(Finish::NonFoil)));
-        assert_eq!(opt.extras.as_ref().unwrap().manual_sgd, None);
+        assert_eq!(opt.extras.as_ref().unwrap().manual_price, None);
         let s = &lines[1];
         assert_eq!(s.scryfall_id.as_deref(), Some("id-sheol"));
         assert_eq!((s.qty, s.finish, s.set.as_deref(), s.number.as_deref()), (3, Some(Finish::Foil), Some("DMU"), Some("107")));
         let x = s.extras.as_ref().unwrap();
         assert_eq!(x.condition, Some(Condition::LP));
-        assert_eq!(x.manual_sgd, Some(99.5));
+        assert_eq!(x.manual_price, Some(99.5));
         assert_eq!(x.notes, "binder 2");
         assert!(x.checked);
         assert_eq!(x.treatment, "Signed");
+    }
+
+    #[test]
+    fn sheet_remembers_its_currency() {
+        use crate::model::{Entry, Settings};
+        let entries = vec![Entry {
+            uid: 1,
+            scryfall_id: "id".into(),
+            name: "Opt".into(),
+            qty: 1,
+            manual_price: Some(4.5),
+            ..Default::default()
+        }];
+        let settings = Settings { currency: "EUR".into(), fx_rate: 0.9, ..Default::default() };
+        let path = std::env::temp_dir().join(format!("cc_sheet_eur_{}.xlsx", std::process::id()));
+        crate::export::export(&path, &entries, &settings).unwrap();
+        let lines = parse_sheet(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let x = lines[0].extras.as_ref().unwrap();
+        assert_eq!((x.currency.as_str(), x.usd_rate, x.manual_price), ("EUR", Some(0.9), Some(4.5)));
     }
 
     #[test]
