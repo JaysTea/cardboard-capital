@@ -6,7 +6,7 @@ use egui::{Align, Align2, Layout, RichText, Sense, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
 
 use crate::app::{App, Images};
-use crate::model::{money, parse_money, Condition, Entry, Finish, RarityFilter};
+use crate::model::{parse_money, Condition, Entry, Finish, RarityFilter};
 use crate::ui::widgets::{self, bold, ToastKind, ACCENT, CARD_ASPECT};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -37,7 +37,7 @@ pub struct CollectionState {
     pub unchecked_only: bool,
     pub sort: SortKey,
     pub desc: bool,
-    /// Text being typed into the "Manual S$" cells, keyed by entry uid.
+    /// Text being typed into the manual price cells, keyed by entry uid.
     manual_bufs: HashMap<u64, String>,
     pending_delete: Option<u64>,
 }
@@ -83,7 +83,7 @@ fn visible_rows(entries: &[Entry], c: &CollectionState, rate: f64) -> Vec<usize>
                 && (c.set_filter.is_empty() || e.set_code == c.set_filter)
                 && c.rarity.matches(&e.rarity)
                 && c.finish.is_none_or(|f| e.finish == f)
-                && (!c.manual_only || e.manual_sgd.is_some())
+                && (!c.manual_only || e.manual_price.is_some())
                 && (!c.unchecked_only || !e.checked)
         })
         .collect();
@@ -104,8 +104,8 @@ fn visible_rows(entries: &[Entry], c: &CollectionState, rate: f64) -> Vec<usize>
             SortKey::Condition => (x.condition as u8).cmp(&(y.condition as u8)),
             SortKey::Qty => x.qty.cmp(&y.qty),
             SortKey::Usd => f(x.usd).total_cmp(&f(y.usd)),
-            SortKey::Unit => f(x.unit_sgd(rate)).total_cmp(&f(y.unit_sgd(rate))),
-            SortKey::Total => f(x.total_sgd(rate)).total_cmp(&f(y.total_sgd(rate))),
+            SortKey::Unit => f(x.unit_price(rate)).total_cmp(&f(y.unit_price(rate))),
+            SortKey::Total => f(x.total_price(rate)).total_cmp(&f(y.total_price(rate))),
         }
         .then_with(|| x.name.cmp(&y.name));
         if c.desc {
@@ -128,6 +128,7 @@ struct Actions {
     refresh: bool,
     export: bool,
     open_xlsx: bool,
+    export_as: bool,
     open_folder: bool,
     dirty: bool,
 }
@@ -156,7 +157,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 let mut missing = 0;
                 for e in idx {
                     q += e.qty;
-                    match e.total_sgd(rate) {
+                    match e.total_price(rate) {
                         Some(t) => s += t,
                         None => missing += 1,
                     }
@@ -172,14 +173,14 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     app.collection.len(),
                     fq
                 ));
-                ui.label(bold(format!("S$ {}", money(fs))).color(ACCENT));
+                ui.label(bold(crate::model::cur().fmt(fs)).color(ACCENT));
                 if fmissing > 0 {
                     ui.label(RichText::new(format!("· {fmissing} without a price")).weak());
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(bold(format!(
-                        "Collection total: {tq} cards · S$ {}",
-                        money(ts)
+                        "Collection total: {tq} cards · {}",
+                        crate::model::cur().fmt(ts)
                     )));
                 });
             });
@@ -213,6 +214,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if act.open_xlsx {
         app.open_export();
     }
+    if act.export_as {
+        app.export_as();
+    }
     if act.open_folder {
         let path = app.export_path();
         let folder = path.parent().map(|p| p.to_path_buf()).unwrap_or(app.app_dir.clone());
@@ -237,6 +241,10 @@ fn toolbar(app: &mut App, ui: &mut Ui, act: &mut Actions) {
                 .on_hover_text("Open the folder the spreadsheet is saved in")
                 .clicked();
             act.open_xlsx |= ui.button("📄 Open sheet").clicked();
+            act.export_as |= ui
+                .button("Save copy as…")
+                .on_hover_text("Save a copy of the spreadsheet somewhere else (the usual one keeps updating)")
+                .clicked();
             act.export |= widgets::primary_button(ui, "⬇  Export XLSX").clicked();
             if *refresh_loading {
                 ui.spinner();
@@ -358,8 +366,8 @@ fn hover_card(ui: &mut Ui, images: &mut Images, e: &Entry, rate: f64) {
         e.finish.label(),
         e.condition.long_label()
     ));
-    if let Some(u) = e.unit_sgd(rate) {
-        ui.label(format!("S$ {} each ({})", money(u), e.price_source()));
+    if let Some(u) = e.unit_price(rate) {
+        ui.label(format!("{} each ({})", crate::model::cur().fmt(u), e.price_source()));
     }
 }
 
@@ -372,6 +380,8 @@ fn table(app: &mut App, ui: &mut Ui, rows: &[usize], rate: f64, act: &mut Action
     } = app;
     let mut delete = None;
 
+    let sym = crate::model::cur().symbol;
+    let (manual_h, unit_h, total_h) = (format!("Manual {sym}"), format!("Unit {sym}"), format!("Total {sym}"));
     let header_cols: [(SortKey, &str); 13] = [
         (SortKey::Name, "Name"),
         (SortKey::Set, "Set"),
@@ -382,9 +392,9 @@ fn table(app: &mut App, ui: &mut Ui, rows: &[usize], rate: f64, act: &mut Action
         (SortKey::Condition, "Cond."),
         (SortKey::Qty, "Qty"),
         (SortKey::Usd, "US$"),
-        (SortKey::Unit, "Manual S$"),
-        (SortKey::Unit, "Unit S$"),
-        (SortKey::Total, "Total S$"),
+        (SortKey::Unit, manual_h.as_str()),
+        (SortKey::Unit, unit_h.as_str()),
+        (SortKey::Total, total_h.as_str()),
         (SortKey::Added, "Notes"),
     ];
 
@@ -414,7 +424,7 @@ fn table(app: &mut App, ui: &mut Ui, rows: &[usize], rate: f64, act: &mut Action
             });
             for (key, label) in header_cols {
                 header.col(|ui| {
-                    if label == "Manual S$" || label == "Notes" {
+                    if label == manual_h || label == "Notes" {
                         ui.label(bold(label));
                     } else {
                         sort_header(ui, c, key, label);
@@ -527,30 +537,30 @@ fn table(app: &mut App, ui: &mut Ui, rows: &[usize], rate: f64, act: &mut Action
                 });
                 row.col(|ui| {
                     let buf = c.manual_bufs.entry(e.uid).or_insert_with(|| {
-                        e.manual_sgd.map(|v| format!("{v:.2}")).unwrap_or_default()
+                        e.manual_price.map(|v| format!("{v:.2}")).unwrap_or_default()
                     });
                     let r = ui.add(TextEdit::singleline(buf).hint_text("—").desired_width(70.0));
                     if r.lost_focus() {
                         match parse_money(buf) {
                             Ok(v) => {
-                                if v != e.manual_sgd {
-                                    e.manual_sgd = v;
+                                if v != e.manual_price {
+                                    e.manual_price = v;
                                     act.dirty = true;
                                 }
                                 *buf = v.map(|v| format!("{v:.2}")).unwrap_or_default();
                             }
                             Err(()) => {
-                                *buf = e.manual_sgd.map(|v| format!("{v:.2}")).unwrap_or_default()
+                                *buf = e.manual_price.map(|v| format!("{v:.2}")).unwrap_or_default()
                             }
                         }
                     }
                     r.on_hover_text(
-                        "Type a price in S$ to override Scryfall. Clear it to go back to Scryfall.",
+                        "Type a price in your currency to override Scryfall. Clear it to go back to Scryfall.",
                     );
                 });
                 row.col(|ui| {
-                    let text = e.unit_sgd(rate).map(money).unwrap_or_else(|| "—".into());
-                    let rt = if e.manual_sgd.is_some() {
+                    let text = e.unit_price(rate).map(|v| crate::model::cur().amount(v)).unwrap_or_else(|| "—".into());
+                    let rt = if e.manual_price.is_some() {
                         RichText::new(text).color(ACCENT)
                     } else {
                         RichText::new(text)
@@ -558,7 +568,7 @@ fn table(app: &mut App, ui: &mut Ui, rows: &[usize], rate: f64, act: &mut Action
                     ui.label(rt).on_hover_text(e.price_source());
                 });
                 row.col(|ui| {
-                    let text = e.total_sgd(rate).map(money).unwrap_or_else(|| "—".into());
+                    let text = e.total_price(rate).map(|v| crate::model::cur().amount(v)).unwrap_or_else(|| "—".into());
                     ui.label(bold(text));
                 });
                 row.col(|ui| {

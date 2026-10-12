@@ -606,7 +606,7 @@ pub mod tests {
         let img = client.fetch_bytes(&exact.image("small").unwrap()).unwrap();
         assert!(img.len() > 1000);
 
-        let fx = crate::fx::fetch_usd_sgd(client.agent()).unwrap();
+        let fx = crate::fx::fetch_rate(client.agent(), "SGD").unwrap();
         println!("USD->SGD {} from {} ({})", fx.rate, fx.source, fx.date);
         assert!(fx.rate > 0.8 && fx.rate < 2.5);
     }

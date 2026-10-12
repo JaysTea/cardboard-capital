@@ -8,7 +8,7 @@ use egui::{
 };
 
 use crate::app::{App, Images};
-use crate::model::{money, parse_money, rarity_label, Condition, Entry, Finish, RarityFilter};
+use crate::model::{parse_money, rarity_label, Condition, Entry, Finish, RarityFilter};
 use crate::scryfall::{parse_set_code, price_usd, printed_number_candidates, treatment, Card};
 use crate::ui::widgets::{self, bold, ToastKind, ACCENT, CARD_ASPECT};
 use crate::worker::{Job, SearchResult};
@@ -30,7 +30,7 @@ pub struct AddState {
     pub finish: Finish,
     pub condition: Condition,
     pub qty: u32,
-    pub manual_sgd: String,
+    pub manual_price: String,
     pub treatment_override: String,
     pub notes: String,
 
@@ -145,7 +145,7 @@ impl AddState {
         self.name.clear();
         self.number.clear();
         self.qty = 1;
-        self.manual_sgd.clear();
+        self.manual_price.clear();
         self.treatment_override.clear();
         self.notes.clear();
         self.rarity = RarityFilter::Any;
@@ -261,7 +261,7 @@ fn add_selected(app: &mut App) {
         return;
     };
     let a = &app.add;
-    let manual = match parse_money(&a.manual_sgd) {
+    let manual = match parse_money(&a.manual_price) {
         Ok(v) => v,
         Err(()) => {
             app.toast(ToastKind::Error, "The manual price isn't a valid number.");
@@ -270,7 +270,7 @@ fn add_selected(app: &mut App) {
     };
     let qty = a.qty.max(1);
     let mut entry = Entry::from_card(&card, a.finish, a.condition, qty);
-    entry.manual_sgd = manual;
+    entry.manual_price = manual;
     entry.treatment_override = a.treatment_override.trim().to_string();
     entry.notes = a.notes.trim().to_string();
     let label = format!(
@@ -490,15 +490,15 @@ fn form(app: &mut App, ui: &mut Ui) {
 
             ui.label("Manual price");
             ui.horizontal(|ui| {
-                ui.label("S$");
+                ui.label(crate::model::cur().symbol);
                 ui.add(
-                    TextEdit::singleline(&mut a.manual_sgd)
+                    TextEdit::singleline(&mut a.manual_price)
                         .hint_text("auto (Scryfall)")
                         .desired_width(120.0),
                 );
             })
             .response
-            .on_hover_text("Leave empty to use the Scryfall price converted to SGD.");
+            .on_hover_text("Leave empty to use the Scryfall price converted to your currency.");
             ui.end_row();
 
             ui.label("Treatment");
@@ -710,7 +710,7 @@ fn details(
     }
 
     ui.add_space(8.0);
-    let manual = parse_money(&a.manual_sgd).ok().flatten();
+    let manual = parse_money(&a.manual_price).ok().flatten();
     let unit = manual.or(usd.map(|u| u * rate));
     egui::Frame::default()
         .fill(ui.visuals().faint_bg_color)
@@ -728,7 +728,7 @@ fn details(
             );
             ui.label(
                 bold(
-                    unit.map(|u| format!("S$ {}", money(u)))
+                    unit.map(|u| crate::model::cur().fmt(u))
                         .unwrap_or_else(|| "—".into()),
                 )
                 .size(32.0)
@@ -752,7 +752,7 @@ fn details(
             }
             if a.qty > 1 {
                 if let Some(u) = unit {
-                    ui.label(format!("× {} = S$ {}", a.qty, money(u * a.qty as f64)));
+                    ui.label(format!("× {} = {}", a.qty, crate::model::cur().fmt(u * a.qty as f64)));
                 }
             }
         });
@@ -936,7 +936,7 @@ fn variant_tile(
             format!("no {}", finish.label().to_lowercase())
         } else {
             match price_usd(card, finish) {
-                Some(u) => format!("S$ {}", money(u * rate)),
+                Some(u) => crate::model::cur().fmt(u * rate),
                 None => "no price".into(),
             }
         };

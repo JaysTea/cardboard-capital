@@ -10,9 +10,19 @@ use std::thread;
 
 use crate::fx::{self, FxQuote};
 use crate::import::{self, ImportOptions, ImportResult, ImportSource};
+use crate::model::UpdateChannel;
+use crate::update::{self, UpdateInfo};
 use crate::scryfall::{Card, Client};
 
 pub enum Job {
+    CheckUpdate {
+        channel: UpdateChannel,
+        manual: bool,
+    },
+    InstallUpdate {
+        info: UpdateInfo,
+        data_dir: PathBuf,
+    },
     Autocomplete {
         seq: u64,
         query: String,
@@ -29,7 +39,9 @@ pub enum Job {
     RefreshPrices {
         ids: Vec<String>,
     },
-    FetchFx,
+    FetchFx {
+        currency: String,
+    },
     Import {
         seq: u64,
         source: ImportSource,
@@ -44,6 +56,11 @@ pub struct SearchResult {
 }
 
 pub enum Reply {
+    Update {
+        manual: bool,
+        result: Result<Option<UpdateInfo>, String>,
+    },
+    Installed(Result<PathBuf, String>),
     Autocomplete {
         seq: u64,
         result: Result<Vec<String>, String>,
@@ -167,11 +184,18 @@ fn run_job(client: &Client, job: Job) -> Reply {
             Reply::Search { seq, result }
         }
         Job::RefreshPrices { ids } => Reply::Prices(client.cards_by_id(&ids)),
-        Job::FetchFx => Reply::Fx(fx::fetch_usd_sgd(client.agent())),
+        Job::FetchFx { currency } => Reply::Fx(fx::fetch_rate(client.agent(), &currency)),
         Job::Import { seq, source, opts } => Reply::Import {
             seq,
             result: import::run(client, source, opts),
         },
+        Job::CheckUpdate { channel, manual } => Reply::Update {
+            manual,
+            result: update::check(client.agent(), channel),
+        },
+        Job::InstallUpdate { info, data_dir } => {
+            Reply::Installed(update::install(client.agent(), &info, &data_dir))
+        }
     }
 }
 

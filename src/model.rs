@@ -146,8 +146,10 @@ pub struct Entry {
     pub qty: u32,
     /// Scryfall USD price for this finish.
     pub usd: Option<f64>,
-    /// Manual SGD unit price; overrides the converted Scryfall price.
-    pub manual_sgd: Option<f64>,
+    /// Manual unit price in the user's currency; overrides the converted Scryfall price.
+    /// (Saved as "manual_sgd" so older versions can still read it.)
+    #[serde(rename = "manual_sgd")]
+    pub manual_price: Option<f64>,
     pub checked: bool,
     pub notes: String,
     pub scryfall_uri: String,
@@ -198,16 +200,16 @@ impl Entry {
         }
     }
 
-    pub fn unit_sgd(&self, rate: f64) -> Option<f64> {
-        self.manual_sgd.or(self.usd.map(|u| u * rate))
+    pub fn unit_price(&self, rate: f64) -> Option<f64> {
+        self.manual_price.or(self.usd.map(|u| u * rate))
     }
 
-    pub fn total_sgd(&self, rate: f64) -> Option<f64> {
-        self.unit_sgd(rate).map(|u| u * self.qty as f64)
+    pub fn total_price(&self, rate: f64) -> Option<f64> {
+        self.unit_price(rate).map(|u| u * self.qty as f64)
     }
 
     pub fn price_source(&self) -> &'static str {
-        if self.manual_sgd.is_some() {
+        if self.manual_price.is_some() {
             "Manual"
         } else if self.usd.is_some() {
             "Scryfall"
@@ -228,8 +230,8 @@ impl Entry {
 pub fn add_or_merge(collection: &mut Vec<Entry>, entry: Entry) -> (bool, u32) {
     if let Some(existing) = collection.iter_mut().find(|e| e.same_stack(&entry)) {
         existing.qty += entry.qty;
-        if entry.manual_sgd.is_some() {
-            existing.manual_sgd = entry.manual_sgd;
+        if entry.manual_price.is_some() {
+            existing.manual_price = entry.manual_price;
         }
         if !entry.treatment_override.trim().is_empty() {
             existing.treatment_override = entry.treatment_override;
@@ -252,39 +254,96 @@ pub fn add_or_merge(collection: &mut Vec<Entry>, entry: Entry) -> (bool, u32) {
     }
 }
 
+/// Which releases the app offers as updates.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UpdateChannel {
+    Stable,
+    Beta,
+    Off,
+}
+
+impl UpdateChannel {
+    pub const ALL: [UpdateChannel; 3] = [UpdateChannel::Stable, UpdateChannel::Beta, UpdateChannel::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            UpdateChannel::Stable => "Stable",
+            UpdateChannel::Beta => "Beta",
+            UpdateChannel::Off => "Off",
+        }
+    }
+
+    pub fn help(self) -> &'static str {
+        match self {
+            UpdateChannel::Stable => "Tested releases only (recommended).",
+            UpdateChannel::Beta => "Also get betas: new features early, may have bugs.",
+            UpdateChannel::Off => "Never check. Stay on this version.",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Settings {
-    /// Empty = "Cardboard Capital.xlsx" in the exports folder.
+    /// Legacy full path of the spreadsheet (pre-1.2). Used only when `export_dir` is empty.
     pub export_path: String,
+    /// Folder the spreadsheet is saved in. Empty = the app's `exports` folder.
+    pub export_dir: String,
+    /// The "where should the spreadsheet go?" question has been answered.
+    pub export_prompted: bool,
     pub auto_export: bool,
+    /// ISO code prices are shown in (see `CURRENCIES`).
+    pub currency: String,
+    /// USD -> `currency` rate.
     pub fx_rate: f64,
     pub fx_updated: String,
     pub fx_source: String,
     pub fx_manual: bool,
     pub fx_manual_rate: f64,
-    /// Rows with Total S$ at or above this are highlighted in the sheet.
-    pub highlight_sgd: f64,
+    /// Rows whose total (in the user's currency) is at least this are highlighted in the sheet.
+    #[serde(rename = "highlight_sgd")]
+    pub highlight_value: f64,
     pub dark_mode: bool,
+    /// None = follow the build: beta builds check the Beta channel, others Stable.
+    pub update_channel: Option<UpdateChannel>,
+    /// Tag of an update the user chose to skip (e.g. "v1.2.0").
+    pub skipped_version: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             export_path: String::new(),
+            export_dir: String::new(),
+            export_prompted: false,
             auto_export: true,
+            currency: "SGD".into(),
             fx_rate: 1.30,
             fx_updated: String::new(),
             fx_source: "default (not fetched yet)".into(),
             fx_manual: false,
             fx_manual_rate: 1.30,
-            highlight_sgd: 20.0,
+            highlight_value: 20.0,
             dark_mode: true,
+            update_channel: None,
+            skipped_version: String::new(),
         }
     }
 }
 
 impl Settings {
+    pub fn currency(&self) -> &'static Currency {
+        currency(&self.currency)
+    }
+
+    pub fn channel(&self) -> UpdateChannel {
+        self.update_channel.unwrap_or(if crate::update::current_version().pre.is_empty() {
+            UpdateChannel::Stable
+        } else {
+            UpdateChannel::Beta
+        })
+    }
+
     pub fn rate(&self) -> f64 {
         if self.fx_manual {
             self.fx_manual_rate
@@ -302,17 +361,109 @@ pub fn now_string() -> String {
 pub fn parse_money(s: &str) -> Result<Option<f64>, ()> {
     let cleaned: String = s
         .trim()
-        .trim_start_matches("S$")
-        .trim_start_matches('$')
+        // Drop a leading currency symbol or code: "S$", "$", "€", "RM ", "EUR "…
+        .trim_start_matches(|c: char| !c.is_ascii_digit() && c != '.')
         .chars()
         .filter(|c| *c != ',' && !c.is_whitespace())
         .collect();
     if cleaned.is_empty() {
-        return Ok(None);
+        // Blank means "no price"; something with no digits at all ("abc") is a typo.
+        return if s.trim().is_empty() { Ok(None) } else { Err(()) };
     }
     match cleaned.parse::<f64>() {
         Ok(v) if v.is_finite() && v >= 0.0 => Ok(Some(v)),
         _ => Err(()),
+    }
+}
+
+/// A currency prices can be shown in. Prices are USD from Scryfall, converted at a live rate.
+#[derive(Debug, PartialEq)]
+pub struct Currency {
+    pub code: &'static str,
+    pub symbol: &'static str,
+    pub name: &'static str,
+    /// Decimal places shown (0 for yen, won, …).
+    pub decimals: usize,
+}
+
+const fn c(code: &'static str, symbol: &'static str, name: &'static str, decimals: usize) -> Currency {
+    Currency { code, symbol, name, decimals }
+}
+
+/// Supported currencies. All are available from the exchange-rate sources in `fx.rs`.
+pub const CURRENCIES: &[Currency] = &[
+    c("SGD", "S$", "Singapore dollar", 2),
+    c("USD", "US$", "US dollar", 2),
+    c("EUR", "€", "Euro", 2),
+    c("GBP", "£", "British pound", 2),
+    c("AUD", "A$", "Australian dollar", 2),
+    c("CAD", "C$", "Canadian dollar", 2),
+    c("NZD", "NZ$", "New Zealand dollar", 2),
+    c("JPY", "¥", "Japanese yen", 0),
+    c("CNY", "CN¥", "Chinese yuan", 2),
+    c("HKD", "HK$", "Hong Kong dollar", 2),
+    c("TWD", "NT$", "New Taiwan dollar", 0),
+    c("KRW", "₩", "South Korean won", 0),
+    c("MYR", "RM", "Malaysian ringgit", 2),
+    c("IDR", "Rp", "Indonesian rupiah", 0),
+    c("PHP", "₱", "Philippine peso", 2),
+    c("THB", "THB", "Thai baht", 2),
+    c("VND", "₫", "Vietnamese dong", 0),
+    c("INR", "₹", "Indian rupee", 2),
+    c("CHF", "CHF", "Swiss franc", 2),
+    c("SEK", "SEK", "Swedish krona", 2),
+    c("NOK", "NOK", "Norwegian krone", 2),
+    c("DKK", "DKK", "Danish krone", 2),
+    c("PLN", "zł", "Polish złoty", 2),
+    c("BRL", "R$", "Brazilian real", 2),
+    c("MXN", "MX$", "Mexican peso", 2),
+    c("ZAR", "R", "South African rand", 2),
+];
+
+static DISPLAY_CURRENCY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The currency the UI is showing (set by the app from settings each frame).
+pub fn cur() -> &'static Currency {
+    &CURRENCIES[DISPLAY_CURRENCY.load(std::sync::atomic::Ordering::Relaxed).min(CURRENCIES.len() - 1)]
+}
+
+pub fn set_display_currency(code: &str) {
+    let i = CURRENCIES.iter().position(|c| c.code.eq_ignore_ascii_case(code)).unwrap_or(0);
+    DISPLAY_CURRENCY.store(i, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Looks up a currency by code; unknown codes fall back to SGD.
+pub fn currency(code: &str) -> &'static Currency {
+    CURRENCIES
+        .iter()
+        .find(|c| c.code.eq_ignore_ascii_case(code))
+        .unwrap_or(&CURRENCIES[0])
+}
+
+impl Currency {
+    /// 1234.5 -> "S$ 1,234.50", "¥ 1,235"
+    pub fn fmt(&self, v: f64) -> String {
+        format!("{} {}", self.symbol, self.amount(v))
+    }
+
+    /// Just the number, with this currency's decimals: "1,234.50"
+    pub fn amount(&self, v: f64) -> String {
+        if self.decimals == 0 {
+            let s = money(v.round());
+            s.trim_end_matches(".00").to_string()
+        } else {
+            money(v)
+        }
+    }
+
+    /// Excel number format, e.g. `"S$"#,##0.00`.
+    pub fn excel_format(&self) -> String {
+        let sym = self.symbol.replace('"', "");
+        if self.decimals == 0 {
+            format!("\"{sym}\"#,##0")
+        } else {
+            format!("\"{sym}\"#,##0.00")
+        }
     }
 }
 
@@ -373,10 +524,10 @@ mod tests {
         first.notes = "binder 1".into();
         let mut c = vec![first];
         let mut second = entry("a", Finish::Foil, Condition::NM, 1);
-        second.manual_sgd = Some(12.0);
+        second.manual_price = Some(12.0);
         second.notes = "from trade".into();
         add_or_merge(&mut c, second);
-        assert_eq!(c[0].manual_sgd, Some(12.0));
+        assert_eq!(c[0].manual_price, Some(12.0));
         assert_eq!(c[0].notes, "binder 1; from trade");
     }
 
@@ -384,12 +535,26 @@ mod tests {
     fn pricing() {
         let mut e = entry("a", Finish::Foil, Condition::NM, 3);
         e.usd = Some(10.0);
-        assert_eq!(e.unit_sgd(1.3), Some(13.0));
-        assert_eq!(e.total_sgd(1.3), Some(39.0));
+        assert_eq!(e.unit_price(1.3), Some(13.0));
+        assert_eq!(e.total_price(1.3), Some(39.0));
         assert_eq!(e.price_source(), "Scryfall");
-        e.manual_sgd = Some(5.0);
-        assert_eq!(e.total_sgd(1.3), Some(15.0));
+        e.manual_price = Some(5.0);
+        assert_eq!(e.total_price(1.3), Some(15.0));
         assert_eq!(e.price_source(), "Manual");
+    }
+
+    #[test]
+    fn currencies() {
+        assert_eq!(currency("eur").code, "EUR");
+        assert_eq!(currency("XXX").code, "SGD");
+        assert_eq!(currency("SGD").fmt(1234.5), "S$ 1,234.50");
+        assert_eq!(currency("JPY").fmt(1234.5), "¥ 1,235");
+        assert_eq!(currency("JPY").excel_format(), "\"¥\"#,##0");
+        assert_eq!(parse_money("€ 12.5"), Ok(Some(12.5)));
+        assert_eq!(parse_money("RM3"), Ok(Some(3.0)));
+        // Old settings files (no currency field) stay SGD.
+        let s: Settings = serde_json::from_str("{\"fx_rate\": 1.3}").unwrap();
+        assert_eq!(s.currency().code, "SGD");
     }
 
     #[test]

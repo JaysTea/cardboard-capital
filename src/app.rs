@@ -10,6 +10,7 @@ use crate::storage;
 use crate::ui::add::AddState;
 use crate::ui::collection::CollectionState;
 use crate::ui::import::ImportState;
+use crate::ui::update::UpdateState;
 use crate::ui::widgets::{self, Toast, ToastKind};
 use crate::worker::{self, Job, Reply, Worker};
 use crate::{export, ui};
@@ -82,8 +83,11 @@ pub struct App {
     pub add: AddState,
     pub coll: CollectionState,
     pub import: ImportState,
+    pub update: UpdateState,
     pub toasts: Vec<Toast>,
     pub fx_loading: bool,
+    /// Currency being switched to while its rate is fetched.
+    pub pending_currency: Option<String>,
     pub refresh_loading: bool,
     next_uid: u64,
     /// Time of the first unsaved edit (edits are debounced before saving).
@@ -99,6 +103,7 @@ impl App {
         let app_dir = storage::app_dir();
         let moved = storage::prepare_dirs(&app_dir);
         let data_dir = storage::data_dir(&app_dir);
+        crate::update::cleanup(&data_dir);
         let (collection, load_error) = storage::load_collection(&data_dir);
         let mut settings = storage::load_settings(&data_dir);
         // Old builds could point the export at the exe folder; that now lives in exports.
@@ -129,8 +134,10 @@ impl App {
             add: AddState::new(),
             coll: CollectionState::default(),
             import: ImportState::default(),
+            update: UpdateState::default(),
             toasts: Vec::new(),
             fx_loading: false,
+            pending_currency: None,
             refresh_loading: false,
             next_uid,
             dirty_since: None,
@@ -147,6 +154,8 @@ impl App {
             );
         }
         app.fetch_fx();
+        app.update.auto_install = std::env::args().any(|a| a == "--install-update-now");
+        ui::update::check(&mut app, false);
 
         // `"Cardboard Capital.exe" "Card Name" [--printings]` starts with that lookup;
         // `--collection` opens on the Collection tab.
@@ -161,7 +170,13 @@ impl App {
             }
             return app;
         }
-        if let Some(name) = args.iter().find(|a| !a.starts_with("--")) {
+        // The first argument that isn't a flag or a flag's value is a card name to look up.
+        let positional = args
+            .iter()
+            .enumerate()
+            .find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--pretend-version"))
+            .map(|(_, a)| a);
+        if let Some(name) = positional {
             ui::add::lookup_on_start(&mut app, name, args.iter().any(|a| a == "--printings"));
         }
         app
@@ -171,11 +186,45 @@ impl App {
         self.settings.rate()
     }
 
+    /// Where the spreadsheet is written: the chosen folder, else a pre-1.2 custom path,
+    /// else `exportsCardboard Capital.xlsx`.
     pub fn export_path(&self) -> PathBuf {
-        if self.settings.export_path.trim().is_empty() {
-            storage::default_export_path(&self.app_dir)
+        let s = &self.settings;
+        if !s.export_dir.trim().is_empty() {
+            PathBuf::from(s.export_dir.trim()).join(storage::EXPORT_FILE)
+        } else if !s.export_path.trim().is_empty() {
+            PathBuf::from(s.export_path.trim())
         } else {
-            PathBuf::from(&self.settings.export_path)
+            storage::default_export_path(&self.app_dir)
+        }
+    }
+
+    /// Saves a one-off copy of the spreadsheet somewhere else (doesn't change the export location).
+    pub fn export_as(&mut self) {
+        let Some(mut path) = rfd::FileDialog::new()
+            .add_filter("Excel workbook", &["xlsx"])
+            .set_file_name(storage::EXPORT_FILE)
+            .save_file()
+        else {
+            return;
+        };
+        if path.extension().is_none() {
+            path.set_extension("xlsx");
+        }
+        match export::export(&path, &self.collection, &self.settings) {
+            Ok(()) => self.toast(ToastKind::Success, format!("Saved a copy to {}", path.display())),
+            Err(e) => self.toast(ToastKind::Error, e),
+        }
+    }
+
+    /// Sets where the spreadsheet is saved (None = the app's exports folder) and re-exports.
+    pub fn set_export_dir(&mut self, dir: Option<PathBuf>) {
+        self.settings.export_dir = dir.map(|d| d.display().to_string()).unwrap_or_default();
+        self.settings.export_path.clear();
+        self.settings.export_prompted = true;
+        self.save_settings();
+        if self.settings.auto_export {
+            self.export(true);
         }
     }
 
@@ -185,7 +234,77 @@ impl App {
 
     pub fn fetch_fx(&mut self) {
         self.fx_loading = true;
-        let _ = self.worker.jobs.send(Job::FetchFx);
+        let currency = self.settings.currency.clone();
+        let _ = self.worker.jobs.send(Job::FetchFx { currency });
+    }
+
+    /// Starts switching to another currency. The switch happens once its rate arrives,
+    /// so manual prices can be converted at real rates.
+    pub fn change_currency(&mut self, code: &str) {
+        if code == self.settings.currency {
+            self.pending_currency = None;
+            return;
+        }
+        self.pending_currency = Some(code.to_string());
+        self.fx_loading = true;
+        let _ = self.worker.jobs.send(Job::FetchFx {
+            currency: code.to_string(),
+        });
+    }
+
+    fn on_fx(&mut self, result: Result<crate::fx::FxQuote, String>) {
+        self.fx_loading = false;
+        let switching = self.pending_currency.take();
+        match result {
+            Ok(q) if switching.as_deref() == Some(q.currency.as_str()) => {
+                let old = self.settings.currency();
+                let old_rate = self.rate();
+                let factor = if old_rate > 0.0 { q.rate / old_rate } else { 1.0 };
+                let mut converted = 0;
+                for e in &mut self.collection {
+                    if let Some(m) = e.manual_price.as_mut() {
+                        *m = (*m * factor * 100.0).round() / 100.0;
+                        converted += 1;
+                    }
+                }
+                self.settings.highlight_value = (self.settings.highlight_value * factor).round();
+                self.settings.currency = q.currency.clone();
+                self.settings.fx_manual = false;
+                self.settings.fx_manual_rate = q.rate;
+                self.apply_quote(q);
+                self.coll.invalidate_buffers();
+                self.save_now();
+                let new = self.settings.currency();
+                let mut msg = format!("Prices are now shown in {} ({}).", new.name, new.code);
+                if converted > 0 {
+                    msg += &format!(" Converted {converted} manual prices from {}.", old.code);
+                }
+                self.toast(ToastKind::Success, msg);
+            }
+            Ok(q) if q.currency == self.settings.currency => self.apply_quote(q),
+            Ok(_) => {} // a reply for a currency we're no longer using
+            Err(e) => {
+                let msg = match switching {
+                    Some(code) => format!("Couldn't switch to {code}: no exchange rate available. {e}"),
+                    None => format!(
+                        "Couldn't fetch the live USD→{} rate, using the last known one. {e}",
+                        self.settings.currency
+                    ),
+                };
+                self.toast(ToastKind::Error, msg);
+            }
+        }
+    }
+
+    fn apply_quote(&mut self, q: crate::fx::FxQuote) {
+        self.settings.fx_rate = q.rate;
+        self.settings.fx_updated = model::now_string();
+        self.settings.fx_source = if q.date.is_empty() {
+            q.source
+        } else {
+            format!("{} ({})", q.source, q.date)
+        };
+        self.save_settings();
     }
 
     pub fn refresh_prices(&mut self) {
@@ -294,26 +413,10 @@ impl App {
                 Reply::Autocomplete { seq, result } => self.add.on_autocomplete(seq, result),
                 Reply::Search { seq, result } => self.add.on_search(seq, result),
                 Reply::Import { seq, result } => self.import.on_result(seq, result),
+                Reply::Update { manual, result } => ui::update::on_checked(self, manual, result),
+                Reply::Installed(result) => ui::update::on_installed(self, ctx, result),
                 Reply::Image { url, result } => self.images.loaded(ctx, url, result),
-                Reply::Fx(result) => {
-                    self.fx_loading = false;
-                    match result {
-                        Ok(q) => {
-                            self.settings.fx_rate = q.rate;
-                            self.settings.fx_updated = model::now_string();
-                            self.settings.fx_source = if q.date.is_empty() {
-                                q.source
-                            } else {
-                                format!("{} ({})", q.source, q.date)
-                            };
-                            self.save_settings();
-                        }
-                        Err(e) => self.toast(
-                            ToastKind::Error,
-                            format!("Couldn't fetch the live USD→SGD rate, using the last known one. {e}"),
-                        ),
-                    }
-                }
+                Reply::Fx(result) => self.on_fx(result),
                 Reply::Prices(result) => {
                     self.refresh_loading = false;
                     match result {
@@ -349,6 +452,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        model::set_display_currency(&self.settings.currency);
         if self.applied_dark != Some(self.settings.dark_mode) {
             widgets::apply_theme(ctx, self.settings.dark_mode);
             self.applied_dark = Some(self.settings.dark_mode);
@@ -371,12 +475,16 @@ impl eframe::App for App {
         }
 
         ui::header(self, ctx);
+        ui::update::bar(self, ctx);
         match self.tab {
             Tab::Add => ui::add::show(self, ctx),
             Tab::Import => ui::import::show(self, ctx),
             Tab::Collection => ui::collection::show(self, ctx),
             Tab::Settings => ui::settings::show(self, ctx),
         }
-        widgets::show_toasts(ctx, &mut self.toasts, now);
+        ui::update::window(self, ctx);
+        ui::settings::export_prompt(self, ctx);
+        let toast_lift = if self.update.available.is_some() { ui::update::BAR_HEIGHT } else { 0.0 };
+        widgets::show_toasts(ctx, &mut self.toasts, now, toast_lift);
     }
 }
