@@ -94,17 +94,32 @@ pub fn on_installed(app: &mut App, ctx: &egui::Context, result: Result<std::path
     }
 }
 
-/// Small button in the header when an update is waiting.
-pub fn header_chip(app: &mut App, ui: &mut Ui) {
-    if let Some(info) = &app.update.available {
-        let label = format!("⬆ Update {}", info.tag);
-        if ui
-            .add(egui::Button::new(bold(label).color(egui::Color32::from_rgb(24, 20, 12))).fill(ACCENT))
-            .clicked()
-        {
-            app.update.show_window = true;
-        }
-    }
+/// Height of the update bar, so toasts can sit above it.
+pub const BAR_HEIGHT: f32 = 44.0;
+
+/// A slim bar along the bottom of the window while an update is waiting, with the
+/// button at the bottom right. Must be added before the tab's own panels.
+pub fn bar(app: &mut App, ctx: &egui::Context) {
+    let Some(info) = app.update.available.clone() else { return };
+    egui::TopBottomPanel::bottom("update_bar")
+        .exact_height(BAR_HEIGHT)
+        .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(14, 6)))
+        .show(ctx, |ui| {
+            ui.horizontal_centered(|ui| {
+                let kind = if info.prerelease { "beta" } else { "version" };
+                ui.label(RichText::new(format!("A new {kind} of Cardboard Capital is available.")).weak());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = format!("⬆  Update to {}", info.tag);
+                    if ui
+                        .add(egui::Button::new(bold(label).color(egui::Color32::from_rgb(24, 20, 12))).fill(ACCENT))
+                        .on_hover_text("See what's new and install it")
+                        .clicked()
+                    {
+                        app.update.show_window = true;
+                    }
+                });
+            });
+        });
 }
 
 pub fn window(app: &mut App, ctx: &egui::Context) {

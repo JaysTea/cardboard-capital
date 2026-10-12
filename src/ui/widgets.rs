@@ -223,7 +223,8 @@ impl Toast {
     }
 }
 
-pub fn show_toasts(ctx: &egui::Context, toasts: &mut Vec<Toast>, now: f64) {
+/// `lift`: extra space to leave at the bottom (e.g. for the update bar).
+pub fn show_toasts(ctx: &egui::Context, toasts: &mut Vec<Toast>, now: f64, lift: f32) {
     toasts.retain(|t| t.shown_at.is_none_or(|s| now - s < t.duration()));
     if toasts.is_empty() {
         return;
@@ -232,7 +233,7 @@ pub fn show_toasts(ctx: &egui::Context, toasts: &mut Vec<Toast>, now: f64) {
     let start = toasts.len().saturating_sub(4);
     let mut dismiss = None;
     egui::Area::new(Id::new("toasts"))
-        .anchor(Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
+        .anchor(Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0 - lift))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.set_max_width(440.0);

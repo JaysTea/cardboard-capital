@@ -74,10 +74,6 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.separator();
                     ui.label(format!("{total_qty} cards · {}", crate::model::cur().fmt(total)));
-                    if app.update.available.is_some() {
-                        ui.separator();
-                        update::header_chip(app, ui);
-                    }
                 });
             });
         });

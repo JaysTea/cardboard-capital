@@ -475,6 +475,7 @@ impl eframe::App for App {
         }
 
         ui::header(self, ctx);
+        ui::update::bar(self, ctx);
         match self.tab {
             Tab::Add => ui::add::show(self, ctx),
             Tab::Import => ui::import::show(self, ctx),
@@ -483,6 +484,7 @@ impl eframe::App for App {
         }
         ui::update::window(self, ctx);
         ui::settings::export_prompt(self, ctx);
-        widgets::show_toasts(ctx, &mut self.toasts, now);
+        let toast_lift = if self.update.available.is_some() { ui::update::BAR_HEIGHT } else { 0.0 };
+        widgets::show_toasts(ctx, &mut self.toasts, now, toast_lift);
     }
 }
