@@ -111,9 +111,10 @@ Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: inst
 | Beta of an upcoming version | pre-release suffix | 1.2.0-beta.1 → 1.2.0-beta.2 → 1.2.0 |
 
 **History**
-- **v1.2.0-beta.3:** the update button moved to a bar at the bottom right (it overlapped the Settings tab).
-- **v1.2.0-beta.2:** choose your currency (26 supported); manual prices and imported sheets are converted automatically.
-- **v1.2.0-beta.1:** in-app update checks with Stable / Beta / Off channels; import another install's spreadsheet; choose the spreadsheet folder; Save copy as….
+- **v1.2.0:** stable release of everything in the 1.2.0 betas: in-app updates with Stable / Beta / Off channels, choose your currency (26 supported), import another install's spreadsheet, choose the spreadsheet folder, Save copy as….
+- v1.2.0-beta.3: the update button moved to a bar at the bottom right (it overlapped the Settings tab).
+- v1.2.0-beta.2: choose your currency (26 supported); manual prices and imported sheets are converted automatically.
+- v1.2.0-beta.1: in-app update checks with Stable / Beta / Off channels; import another install's spreadsheet; choose the spreadsheet folder; Save copy as….
 - **v1.1.0:** first public release as Cardboard Capital. Includes the tidy `data\`/`exports\` folder layout, import from Archidekt links and pasted lists, and fast keyboard entry.
 - v1.0.x: private builds as "MTG Stock Sheet".
 
