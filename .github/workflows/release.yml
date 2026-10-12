@@ -1,0 +1,52 @@
+# Builds the Windows exe and publishes a GitHub release whenever a version tag is pushed.
+#   v1.2.0        -> stable release, marked "Latest"
+#   v1.3.0-beta.1 -> pre-release (beta channel)
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} doesn't match Cargo.toml version $version"
+          }
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: Copy-Item target/release/cardboard_capital.exe Cardboard-Capital.exe
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Cardboard Capital ${{ github.ref_name }}
+          files: Cardboard-Capital.exe
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            **Download `Cardboard-Capital.exe`** below, put it in its own folder and run it. It creates `data\` and `exports\` next to itself.
+            Windows may say "Windows protected your PC": click **More info → Run anyway** (the app isn't code-signed).
+            ${{ contains(github.ref_name, '-') && '⚠️ This is a **beta**: new features being tested. Back up your `data` folder first.' || '' }}

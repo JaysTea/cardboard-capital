@@ -1,0 +1,41 @@
+[package]
+name = "cardboard_capital"
+version = "1.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/JaysTea/cardboard-capital"
+description = "Know what your cardboard is worth, on paper: a TCG collection tracker with live prices and spreadsheet export"
+build = "build.rs"
+
+[[bin]]
+name = "cardboard_capital"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.31"
+egui = "0.31"
+egui_extras = "0.31"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+rust_xlsxwriter = "0.99"
+chrono = "0.4"
+rfd = "0.15"
+open = "5"
+
+[build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+calamine = "0.36"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 4
+
+# Keep image decoding fast in debug builds too.
+[profile.dev.package."*"]
+opt-level = 2
