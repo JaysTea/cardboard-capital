@@ -15,6 +15,7 @@ enum Kind {
     #[default]
     Link,
     Text,
+    Sheet,
 }
 
 #[derive(Default)]
@@ -22,6 +23,7 @@ pub struct ImportState {
     kind: Kind,
     url: String,
     text: String,
+    sheet_path: Option<std::path::PathBuf>,
     condition: Condition,
     default_finish: Finish,
     include_side: bool,
@@ -51,6 +53,7 @@ impl ImportState {
             && match self.kind {
                 Kind::Link => !self.url.trim().is_empty(),
                 Kind::Text => !self.text.trim().is_empty(),
+                Kind::Sheet => self.sheet_path.is_some(),
             }
     }
 }
@@ -85,9 +88,10 @@ fn form(s: &mut ImportState, ui: &mut Ui, start: &mut bool) {
     ui.add_space(8.0);
     ui.heading("Import cards");
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.selectable_value(&mut s.kind, Kind::Link, "🔗 From a link");
         ui.selectable_value(&mut s.kind, Kind::Text, "📝 From text");
+        ui.selectable_value(&mut s.kind, Kind::Sheet, "📄 From a spreadsheet");
     });
     ui.add_space(6.0);
 
@@ -130,6 +134,34 @@ fn form(s: &mut ImportState, ui: &mut Ui, start: &mut bool) {
                 .weak(),
             );
         }
+        Kind::Sheet => {
+            ui.label(RichText::new("Spreadsheet from another install").weak());
+            ui.horizontal(|ui| {
+                if ui.button("📂 Choose file…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("Spreadsheet", &["xlsx", "xlsm", "xls", "ods"])
+                        .pick_file()
+                    {
+                        s.sheet_path = Some(p);
+                    }
+                }
+                match &s.sheet_path {
+                    Some(p) => ui.add(egui::Label::new(
+                        RichText::new(p.file_name().unwrap_or_default().to_string_lossy()).strong(),
+                    ).truncate()).on_hover_text(p.display().to_string()),
+                    None => ui.label(RichText::new("No file chosen").weak()),
+                };
+            });
+            ui.label(
+                RichText::new(
+                    "Pick a spreadsheet exported by Cardboard Capital (or MTG Stock Sheet), e.g. from a friend or \
+                     another PC. Quantity, finish, condition, manual prices, notes and checked marks come across; \
+                     prices are refreshed from Scryfall. Importing the same sheet twice adds the quantities twice.",
+                )
+                .small()
+                .weak(),
+            );
+        }
     }
 
     ui.add_space(10.0);
@@ -137,7 +169,9 @@ fn form(s: &mut ImportState, ui: &mut Ui, start: &mut bool) {
         .num_columns(2)
         .spacing([12.0, 9.0])
         .show(ui, |ui| {
-            ui.label("Condition");
+            let sheet = s.kind == Kind::Sheet;
+            ui.label(if sheet { "Condition (if missing)" } else { "Condition" })
+                .on_hover_text(if sheet { "Spreadsheet rows keep their own condition; this is only used for rows without one." } else { "Applies to every imported card." });
             egui::ComboBox::from_id_salt("import_cond")
                 .selected_text(format!(
                     "{} – {}",
@@ -156,16 +190,20 @@ fn form(s: &mut ImportState, ui: &mut Ui, start: &mut bool) {
                 });
             ui.end_row();
 
-            ui.label("Unmarked finish")
-                .on_hover_text("Used for lines that don't say foil or etched.");
-            ui.horizontal(|ui| {
-                for f in Finish::ALL {
-                    ui.selectable_value(&mut s.default_finish, f, f.label());
-                }
-            });
-            ui.end_row();
+            if !sheet {
+                ui.label("Unmarked finish")
+                    .on_hover_text("Used for lines that don't say foil or etched.");
+                ui.horizontal(|ui| {
+                    for f in Finish::ALL {
+                        ui.selectable_value(&mut s.default_finish, f, f.label());
+                    }
+                });
+                ui.end_row();
+            }
         });
-    ui.checkbox(&mut s.include_side, "Include sideboard and maybeboard");
+    if s.kind != Kind::Sheet {
+        ui.checkbox(&mut s.include_side, "Include sideboard and maybeboard");
+    }
 
     ui.add_space(12.0);
     ui.add_enabled_ui(s.can_start(), |ui| {
@@ -185,9 +223,13 @@ fn form(s: &mut ImportState, ui: &mut Ui, start: &mut bool) {
 pub fn import_on_start(app: &mut App, src: &str) {
     app.tab = Tab::Import;
     let s = &mut app.import;
+    let lower = src.to_lowercase();
     if src.starts_with("http") || src.contains(".com/") {
         s.kind = Kind::Link;
         s.url = src.to_string();
+    } else if [".xlsx", ".xlsm", ".xls", ".ods"].iter().any(|e| lower.ends_with(e)) {
+        s.kind = Kind::Sheet;
+        s.sheet_path = Some(std::path::PathBuf::from(src));
     } else {
         s.kind = Kind::Text;
         s.text = std::fs::read_to_string(src).unwrap_or_default();
@@ -207,6 +249,10 @@ fn start_import(app: &mut App) {
     let source = match s.kind {
         Kind::Link => ImportSource::Link(s.url.trim().to_string()),
         Kind::Text => ImportSource::Text(s.text.clone()),
+        Kind::Sheet => match &s.sheet_path {
+            Some(p) => ImportSource::Sheet(p.clone()),
+            None => return,
+        },
     };
     let opts = ImportOptions {
         default_finish: s.default_finish,
@@ -219,6 +265,23 @@ fn start_import(app: &mut App) {
     });
 }
 
+/// The collection entry for an import row, carrying over details from a spreadsheet import.
+fn entry_for(card: &crate::scryfall::Card, row: &crate::import::ImportRow, default_condition: Condition) -> Entry {
+    let extras = row.line.extras.as_ref();
+    let condition = extras.and_then(|x| x.condition).unwrap_or(default_condition);
+    let mut e = Entry::from_card(card, row.finish, condition, row.qty);
+    if let Some(x) = extras {
+        e.manual_sgd = x.manual_sgd;
+        e.notes = x.notes.clone();
+        e.checked = x.checked;
+        // The sheet shows the override if there was one; keep it only if it differs from auto-detection.
+        if !x.treatment.is_empty() && x.treatment != e.treatment {
+            e.treatment_override = x.treatment.clone();
+        }
+    }
+    e
+}
+
 fn add_rows(app: &mut App) {
     let Some(mut result) = app.import.result.take() else {
         return;
@@ -229,7 +292,7 @@ fn add_rows(app: &mut App) {
     result.rows.retain(|row| {
         let take = row.include && row.card.is_some();
         if let (true, Some(card)) = (take, &row.card) {
-            entries.push(Entry::from_card(card, row.finish, condition, row.qty));
+            entries.push(entry_for(card, row, condition));
             cards += row.qty;
         }
         !take
@@ -254,6 +317,7 @@ fn add_rows(app: &mut App) {
     if result.rows.is_empty() {
         app.import.url.clear();
         app.import.text.clear();
+        app.import.sheet_path = None;
     } else {
         // Leave the rows that weren't imported so they can be fixed or looked up.
         app.import.result = Some(result);

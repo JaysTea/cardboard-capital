@@ -64,13 +64,24 @@ You review everything before it's added: untick rows, change quantity or finish,
 - *Default printing*: the line had no set.
 - *Not found*: use **Look up** to find it in the Add card tab.
 
+### Moving a collection between installs
+Use **📥 Import → From a spreadsheet** and pick a spreadsheet exported by Cardboard Capital (or the older MTG Stock Sheet), e.g. from a friend or another PC. Quantity, finish, condition, manual prices, notes and checked marks all come across, and prices are refreshed. Importing the same sheet twice adds the quantities twice.
+
+### Updates
+The app checks GitHub for new versions when it starts. Pick your channel in **Settings → Updates**:
+- **Stable** (default): tested releases only.
+- **Beta**: also get betas, with new features early.
+- **Off**: never check; stay on your version.
+
+When an update is available, a button appears in the header. **Install & restart** swaps in the new version; your `data` and `exports` are left alone. Switching from Beta back to Stable doesn't downgrade you: you move to the next stable release once it's newer. For an older version, download it from [Releases](https://github.com/JaysTea/cardboard-capital/releases).
+
 ### Prices
 - Prices are Scryfall's **USD (TCGplayer market)** price for each card's finish, converted to SGD with a **live exchange rate** (Frankfurter/ECB, falling back to ExchangeRate-API). A manual rate can be set in Settings.
 - If a price looks wrong, type your own in **Manual S$** in the Collection tab. Tick ✔ once you've cross-checked a row.
 - **Refresh prices** re-fetches everything.
 
 ### The spreadsheet
-`exports\Cardboard Capital.xlsx` is rewritten after every change. You can choose a different location in Settings.
+`exports\Cardboard Capital.xlsx` is rewritten after every change. On first run you're asked where it should live; change it any time in **Settings → Spreadsheet**. **Save copy as…** in the Collection tab saves a one-off copy elsewhere.
 
 - **Collection sheet:** filters on every column; colour-coded rarities; foil rows tinted; valuable rows highlighted; Scryfall and TCGplayer links; dropdowns for Condition, Finish and Checked.
 - **Summary sheet:** the exchange rate in `B4`, plus totals and breakdowns by rarity, finish, condition and set.
@@ -83,7 +94,9 @@ The S$ columns are formulas, so changing `Summary!B4` or a Manual S$ value repri
 ```
 Cardboard-Capital.exe "Lightning Bolt" --printings   # start with a lookup, printings grid open
 Cardboard-Capital.exe --collection                   # open on the Collection tab
-Cardboard-Capital.exe --import <deck link | list.txt>  # open Import and read a link or text file
+Cardboard-Capital.exe --import <deck link | list.txt | sheet.xlsx>  # open Import and read it
+Cardboard-Capital.exe --pretend-version 1.1.0        # act as an older version (to test updates)
+Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: install whatever update is found
 ```
 
 ## Versioning
@@ -98,6 +111,7 @@ Cardboard-Capital.exe --import <deck link | list.txt>  # open Import and read a 
 | Beta of an upcoming version | pre-release suffix | 1.2.0-beta.1 → 1.2.0-beta.2 → 1.2.0 |
 
 **History**
+- **v1.2.0-beta.1:** in-app update checks with Stable / Beta / Off channels; import another install's spreadsheet; choose the spreadsheet folder; Save copy as….
 - **v1.1.0:** first public release as Cardboard Capital. Includes the tidy `data\`/`exports\` folder layout, import from Archidekt links and pasted lists, and fast keyboard entry.
 - v1.0.x: private builds as "MTG Stock Sheet".
 
@@ -137,6 +151,7 @@ git push origin main v1.2.0
 | `src/fx.rs` | USD→SGD rate |
 | `src/model.rs` | Collection entries, merging, settings |
 | `src/storage.rs` | Folder layout, migration, JSON persistence |
+| `src/update.rs` | GitHub release checks per channel, self-update |
 | `src/export.rs` | XLSX writer |
 | `src/worker.rs` | Background threads for API calls and image downloads |
 | `src/ui/` | egui screens: `add.rs`, `import.rs`, `collection.rs`, `settings.rs`, plus shared `widgets.rs` |

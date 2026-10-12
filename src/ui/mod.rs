@@ -2,6 +2,7 @@ pub mod add;
 pub mod collection;
 pub mod import;
 pub mod settings;
+pub mod update;
 pub mod widgets;
 
 use egui::{Align, Layout, RichText};
@@ -73,6 +74,10 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.separator();
                     ui.label(format!("{total_qty} cards · S$ {}", money(total)));
+                    if app.update.available.is_some() {
+                        ui.separator();
+                        update::header_chip(app, ui);
+                    }
                 });
             });
         });

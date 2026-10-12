@@ -28,6 +28,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let mut export_now = false;
     let mut open_sheet = false;
     let mut refresh = false;
+    let mut new_export_dir: Option<Option<std::path::PathBuf>> = None;
 
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -86,30 +87,25 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             });
 
             section(ui, "Spreadsheet", |ui| {
-                ui.label("Export file");
+                ui.label("Your spreadsheet is saved as");
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(export_path.display().to_string()).monospace());
                 });
+                let custom = !s.export_dir.is_empty() || !s.export_path.is_empty();
                 ui.horizontal(|ui| {
-                    if ui.button("Change…").clicked() {
-                        if let Some(p) = rfd::FileDialog::new()
-                            .add_filter("Excel workbook", &["xlsx"])
-                            .set_file_name("Cardboard Capital.xlsx")
-                            .save_file()
-                        {
-                            let mut p = p;
-                            if p.extension().is_none() {
-                                p.set_extension("xlsx");
-                            }
-                            s.export_path = p.display().to_string();
-                            settings_changed = true;
-                            reexport = true;
+                    if ui.button("📁 Choose folder…").clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                            new_export_dir = Some(Some(dir));
                         }
                     }
-                    if !s.export_path.is_empty() && ui.button("Reset to default").clicked() {
-                        s.export_path.clear();
-                        settings_changed = true;
-                        reexport = true;
+                    if custom && ui.button("Use the app's exports folder").clicked() {
+                        new_export_dir = Some(None);
+                    }
+                    if ui.button("Open folder").clicked() {
+                        if let Some(dir) = export_path.parent() {
+                            let _ = std::fs::create_dir_all(dir);
+                            let _ = open::that_detached(dir);
+                        }
                     }
                 });
                 ui.add_space(6.0);
@@ -176,6 +172,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
             });
 
+            section(ui, "Updates", |ui| crate::ui::update::settings_section(app, ui));
+
             section(ui, "About", |ui| {
                 ui.label(bold(format!("Cardboard Capital {}", crate::VERSION)));
                 ui.label("Card data, images and prices from Scryfall (scryfall.com). Exchange rates from Frankfurter (ECB) with ExchangeRate-API as a fallback.");
@@ -207,5 +205,54 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     if refresh {
         app.refresh_prices();
+    }
+    if let Some(dir) = new_export_dir {
+        app.set_export_dir(dir);
+    }
+}
+
+/// Asks once where the spreadsheet should be saved.
+pub fn export_prompt(app: &mut App, ctx: &egui::Context) {
+    if app.settings.export_prompted {
+        return;
+    }
+    // Someone who already picked a location in an older version has answered this.
+    if !app.settings.export_path.is_empty() || !app.settings.export_dir.is_empty() {
+        app.settings.export_prompted = true;
+        app.save_settings();
+        return;
+    }
+    let default = storage::default_export_path(&app.app_dir);
+    let mut choice: Option<Option<std::path::PathBuf>> = None;
+    egui::Window::new("Where should your spreadsheet go?")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.label(
+                "Cardboard Capital keeps a spreadsheet of your collection up to date, ready for Google Sheets, \
+                 Excel or LibreOffice. By default it's saved here:",
+            );
+            ui.label(RichText::new(default.display().to_string()).monospace());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if widgets::primary_button(ui, "Keep it there (recommended)").clicked() {
+                    choice = Some(None);
+                }
+                if ui.button("📁 Choose a folder…").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        choice = Some(Some(dir));
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("You can change this any time in Settings → Spreadsheet.")
+                    .small()
+                    .weak(),
+            );
+        });
+    if let Some(dir) = choice {
+        app.set_export_dir(dir);
     }
 }

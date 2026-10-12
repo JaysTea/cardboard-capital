@@ -252,11 +252,43 @@ pub fn add_or_merge(collection: &mut Vec<Entry>, entry: Entry) -> (bool, u32) {
     }
 }
 
+/// Which releases the app offers as updates.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UpdateChannel {
+    Stable,
+    Beta,
+    Off,
+}
+
+impl UpdateChannel {
+    pub const ALL: [UpdateChannel; 3] = [UpdateChannel::Stable, UpdateChannel::Beta, UpdateChannel::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            UpdateChannel::Stable => "Stable",
+            UpdateChannel::Beta => "Beta",
+            UpdateChannel::Off => "Off",
+        }
+    }
+
+    pub fn help(self) -> &'static str {
+        match self {
+            UpdateChannel::Stable => "Tested releases only (recommended).",
+            UpdateChannel::Beta => "Also get betas: new features early, may have bugs.",
+            UpdateChannel::Off => "Never check. Stay on this version.",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Settings {
-    /// Empty = "Cardboard Capital.xlsx" in the exports folder.
+    /// Legacy full path of the spreadsheet (pre-1.2). Used only when `export_dir` is empty.
     pub export_path: String,
+    /// Folder the spreadsheet is saved in. Empty = the app's `exports` folder.
+    pub export_dir: String,
+    /// The "where should the spreadsheet go?" question has been answered.
+    pub export_prompted: bool,
     pub auto_export: bool,
     pub fx_rate: f64,
     pub fx_updated: String,
@@ -266,12 +298,18 @@ pub struct Settings {
     /// Rows with Total S$ at or above this are highlighted in the sheet.
     pub highlight_sgd: f64,
     pub dark_mode: bool,
+    /// None = follow the build: beta builds check the Beta channel, others Stable.
+    pub update_channel: Option<UpdateChannel>,
+    /// Tag of an update the user chose to skip (e.g. "v1.2.0").
+    pub skipped_version: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             export_path: String::new(),
+            export_dir: String::new(),
+            export_prompted: false,
             auto_export: true,
             fx_rate: 1.30,
             fx_updated: String::new(),
@@ -280,11 +318,21 @@ impl Default for Settings {
             fx_manual_rate: 1.30,
             highlight_sgd: 20.0,
             dark_mode: true,
+            update_channel: None,
+            skipped_version: String::new(),
         }
     }
 }
 
 impl Settings {
+    pub fn channel(&self) -> UpdateChannel {
+        self.update_channel.unwrap_or(if crate::update::current_version().pre.is_empty() {
+            UpdateChannel::Stable
+        } else {
+            UpdateChannel::Beta
+        })
+    }
+
     pub fn rate(&self) -> f64 {
         if self.fx_manual {
             self.fx_manual_rate

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use serde_json::{json, Value};
 
-use crate::model::Finish;
+use crate::model::{parse_money, Condition, Finish};
 use crate::scryfall::{printed_number_candidates, Card, Client};
 
 pub const MOXFIELD_HELP: &str = "Moxfield doesn't allow apps to read decks directly. \
@@ -26,6 +26,19 @@ pub struct ImportLine {
     pub board: String,
     /// The original text line (empty for link imports).
     pub raw: String,
+    /// Per-card details carried over from another install's spreadsheet.
+    pub extras: Option<SheetExtras>,
+}
+
+/// Columns from an exported spreadsheet that the collection keeps per card.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SheetExtras {
+    pub condition: Option<Condition>,
+    pub manual_sgd: Option<f64>,
+    pub notes: String,
+    pub checked: bool,
+    /// As shown in the sheet (an override or the auto-detected label).
+    pub treatment: String,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +76,8 @@ pub struct ImportResult {
 pub enum ImportSource {
     Link(String),
     Text(String),
+    /// A spreadsheet exported by Cardboard Capital (or MTG Stock Sheet).
+    Sheet(std::path::PathBuf),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,6 +104,13 @@ pub fn run(
                 .filter(|l| opts.include_side || !is_side_board(&l.board))
                 .collect();
             ("Pasted list".to_string(), lines)
+        }
+        ImportSource::Sheet(path) => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Spreadsheet".into());
+            (name, parse_sheet(&path)?)
         }
     };
     if lines.is_empty() {
@@ -190,6 +212,7 @@ pub fn parse_archidekt(v: &Value, include_side: bool) -> (String, Vec<ImportLine
             finish: Some(finish),
             board,
             raw: String::new(),
+            extras: None,
         });
     }
     (name, lines)
@@ -247,6 +270,7 @@ pub fn parse_moxfield(v: &Value, include_side: bool) -> (String, Vec<ImportLine>
                 finish: Some(finish),
                 board: board_name.clone(),
                 raw: String::new(),
+                extras: None,
             });
         }
     }
@@ -258,6 +282,95 @@ fn title_case(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
         .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------- spreadsheets
+
+fn cell_text(d: &calamine::Data) -> String {
+    use calamine::Data;
+    match d {
+        Data::String(s) => s.trim().to_string(),
+        Data::Float(f) if f.fract() == 0.0 => format!("{}", *f as i64),
+        Data::Float(f) => f.to_string(),
+        Data::Int(i) => i.to_string(),
+        Data::Bool(b) => b.to_string(),
+        Data::Empty => String::new(),
+        other => other.to_string().trim().to_string(),
+    }
+}
+
+fn cell_number(d: &calamine::Data) -> Option<f64> {
+    use calamine::Data;
+    match d {
+        Data::Float(f) => Some(*f),
+        Data::Int(i) => Some(*i as f64),
+        Data::String(s) => parse_money(s).ok().flatten(),
+        _ => None,
+    }
+}
+
+/// Reads the "Collection" sheet of a spreadsheet exported by this app (any version, including
+/// "MTG Stock Sheet"). Columns are found by their header, so the column order doesn't matter.
+pub fn parse_sheet(path: &std::path::Path) -> Result<Vec<ImportLine>, String> {
+    use calamine::{open_workbook_auto, Reader};
+    let mut wb = open_workbook_auto(path).map_err(|e| format!("Couldn't open {}: {e}", path.display()))?;
+    let names = wb.sheet_names();
+    let sheet = names
+        .iter()
+        .find(|n| n.eq_ignore_ascii_case("Collection"))
+        .or_else(|| names.first())
+        .cloned()
+        .ok_or("The spreadsheet has no sheets.")?;
+    let range = wb
+        .worksheet_range(&sheet)
+        .map_err(|e| format!("Couldn't read sheet \"{sheet}\": {e}"))?;
+    let mut rows = range.rows();
+    let header: Vec<String> = rows.next().ok_or("The spreadsheet is empty.")?.iter().map(cell_text).collect();
+    let col = |title: &str| header.iter().position(|h| h.eq_ignore_ascii_case(title));
+    let (c_id, c_name, c_set, c_num) = (col("Scryfall ID"), col("Name"), col("Set Code"), col("#"));
+    if c_id.is_none() && (c_name.is_none() || c_set.is_none()) {
+        return Err("This doesn't look like a Cardboard Capital spreadsheet: it needs a \"Scryfall ID\" column, \
+                    or \"Name\" and \"Set Code\" columns, on a sheet called Collection."
+            .into());
+    }
+    let (c_qty, c_finish, c_cond) = (col("Qty"), col("Finish"), col("Condition"));
+    let (c_manual, c_notes, c_checked, c_treat) = (col("Manual S$"), col("Notes"), col("Checked"), col("Treatment"));
+
+    let mut lines = Vec::new();
+    for row in rows {
+        let text = |c: Option<usize>| c.and_then(|i| row.get(i)).map(cell_text).unwrap_or_default();
+        let id = text(c_id);
+        let name = text(c_name);
+        if id.is_empty() && name.is_empty() {
+            continue;
+        }
+        let qty = c_qty
+            .and_then(|i| row.get(i))
+            .and_then(cell_number)
+            .map(|q| q.round().max(1.0) as u32)
+            .unwrap_or(1);
+        let finish_text = text(c_finish);
+        let cond_text = text(c_cond);
+        let non_empty = |s: String| (!s.is_empty()).then_some(s);
+        lines.push(ImportLine {
+            qty,
+            name,
+            set: non_empty(text(c_set)),
+            number: non_empty(text(c_num)),
+            scryfall_id: non_empty(id),
+            finish: Finish::ALL.into_iter().find(|f| f.label().eq_ignore_ascii_case(&finish_text)),
+            board: "Main deck".into(),
+            raw: String::new(),
+            extras: Some(SheetExtras {
+                condition: Condition::ALL.into_iter().find(|c| c.label().eq_ignore_ascii_case(&cond_text)),
+                manual_sgd: c_manual.and_then(|i| row.get(i)).and_then(cell_number),
+                notes: text(c_notes),
+                checked: text(c_checked).eq_ignore_ascii_case("yes"),
+                treatment: text(c_treat),
+            }),
+        });
+    }
+    Ok(lines)
 }
 
 // ---------------------------------------------------------------- text
@@ -404,6 +517,7 @@ fn parse_line(line: &str) -> Option<ImportLine> {
         finish,
         board: String::new(),
         raw: line.to_string(),
+        extras: None,
     })
 }
 
@@ -668,6 +782,71 @@ mod tests {
         let (_, all) = parse_archidekt(&v, true);
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].board, "Maybeboard");
+    }
+
+    #[test]
+    fn sheet_roundtrip() {
+        use crate::model::{Entry, Settings};
+        let entries = vec![
+            Entry {
+                uid: 1,
+                scryfall_id: "id-sheol".into(),
+                name: "Sheoldred, the Apocalypse".into(),
+                set_code: "DMU".into(),
+                collector_number: "107".into(),
+                rarity: "mythic".into(),
+                finish: Finish::Foil,
+                condition: Condition::LP,
+                qty: 3,
+                usd: Some(10.0),
+                manual_sgd: Some(99.5),
+                notes: "binder 2".into(),
+                checked: true,
+                treatment: "Normal".into(),
+                treatment_override: "Signed".into(),
+                ..Default::default()
+            },
+            Entry {
+                uid: 2,
+                scryfall_id: "id-opt".into(),
+                name: "Opt".into(),
+                set_code: "XLN".into(),
+                collector_number: "65".into(),
+                rarity: "common".into(),
+                qty: 1,
+                ..Default::default()
+            },
+        ];
+        let path = std::env::temp_dir().join(format!("cc_sheet_roundtrip_{}.xlsx", std::process::id()));
+        crate::export::export(&path, &entries, &Settings::default()).unwrap();
+
+        let lines = parse_sheet(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(lines.len(), 2);
+        // Export sorts by name: Opt first.
+        let opt = &lines[0];
+        assert_eq!((opt.scryfall_id.as_deref(), opt.qty, opt.finish), (Some("id-opt"), 1, Some(Finish::NonFoil)));
+        assert_eq!(opt.extras.as_ref().unwrap().manual_sgd, None);
+        let s = &lines[1];
+        assert_eq!(s.scryfall_id.as_deref(), Some("id-sheol"));
+        assert_eq!((s.qty, s.finish, s.set.as_deref(), s.number.as_deref()), (3, Some(Finish::Foil), Some("DMU"), Some("107")));
+        let x = s.extras.as_ref().unwrap();
+        assert_eq!(x.condition, Some(Condition::LP));
+        assert_eq!(x.manual_sgd, Some(99.5));
+        assert_eq!(x.notes, "binder 2");
+        assert!(x.checked);
+        assert_eq!(x.treatment, "Signed");
+    }
+
+    #[test]
+    fn sheet_rejects_other_spreadsheets() {
+        let path = std::env::temp_dir().join(format!("cc_not_ours_{}.xlsx", std::process::id()));
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        wb.add_worksheet().write_string(0, 0, "Hello").unwrap();
+        wb.save(&path).unwrap();
+        let err = parse_sheet(&path).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(err.contains("doesn't look like"), "{err}");
     }
 
     #[test]

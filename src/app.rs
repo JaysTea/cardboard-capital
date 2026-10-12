@@ -10,6 +10,7 @@ use crate::storage;
 use crate::ui::add::AddState;
 use crate::ui::collection::CollectionState;
 use crate::ui::import::ImportState;
+use crate::ui::update::UpdateState;
 use crate::ui::widgets::{self, Toast, ToastKind};
 use crate::worker::{self, Job, Reply, Worker};
 use crate::{export, ui};
@@ -82,6 +83,7 @@ pub struct App {
     pub add: AddState,
     pub coll: CollectionState,
     pub import: ImportState,
+    pub update: UpdateState,
     pub toasts: Vec<Toast>,
     pub fx_loading: bool,
     pub refresh_loading: bool,
@@ -99,6 +101,7 @@ impl App {
         let app_dir = storage::app_dir();
         let moved = storage::prepare_dirs(&app_dir);
         let data_dir = storage::data_dir(&app_dir);
+        crate::update::cleanup(&data_dir);
         let (collection, load_error) = storage::load_collection(&data_dir);
         let mut settings = storage::load_settings(&data_dir);
         // Old builds could point the export at the exe folder; that now lives in exports.
@@ -129,6 +132,7 @@ impl App {
             add: AddState::new(),
             coll: CollectionState::default(),
             import: ImportState::default(),
+            update: UpdateState::default(),
             toasts: Vec::new(),
             fx_loading: false,
             refresh_loading: false,
@@ -147,6 +151,8 @@ impl App {
             );
         }
         app.fetch_fx();
+        app.update.auto_install = std::env::args().any(|a| a == "--install-update-now");
+        ui::update::check(&mut app, false);
 
         // `"Cardboard Capital.exe" "Card Name" [--printings]` starts with that lookup;
         // `--collection` opens on the Collection tab.
@@ -161,7 +167,13 @@ impl App {
             }
             return app;
         }
-        if let Some(name) = args.iter().find(|a| !a.starts_with("--")) {
+        // The first argument that isn't a flag or a flag's value is a card name to look up.
+        let positional = args
+            .iter()
+            .enumerate()
+            .find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--pretend-version"))
+            .map(|(_, a)| a);
+        if let Some(name) = positional {
             ui::add::lookup_on_start(&mut app, name, args.iter().any(|a| a == "--printings"));
         }
         app
@@ -171,11 +183,45 @@ impl App {
         self.settings.rate()
     }
 
+    /// Where the spreadsheet is written: the chosen folder, else a pre-1.2 custom path,
+    /// else `exportsCardboard Capital.xlsx`.
     pub fn export_path(&self) -> PathBuf {
-        if self.settings.export_path.trim().is_empty() {
-            storage::default_export_path(&self.app_dir)
+        let s = &self.settings;
+        if !s.export_dir.trim().is_empty() {
+            PathBuf::from(s.export_dir.trim()).join(storage::EXPORT_FILE)
+        } else if !s.export_path.trim().is_empty() {
+            PathBuf::from(s.export_path.trim())
         } else {
-            PathBuf::from(&self.settings.export_path)
+            storage::default_export_path(&self.app_dir)
+        }
+    }
+
+    /// Saves a one-off copy of the spreadsheet somewhere else (doesn't change the export location).
+    pub fn export_as(&mut self) {
+        let Some(mut path) = rfd::FileDialog::new()
+            .add_filter("Excel workbook", &["xlsx"])
+            .set_file_name(storage::EXPORT_FILE)
+            .save_file()
+        else {
+            return;
+        };
+        if path.extension().is_none() {
+            path.set_extension("xlsx");
+        }
+        match export::export(&path, &self.collection, &self.settings) {
+            Ok(()) => self.toast(ToastKind::Success, format!("Saved a copy to {}", path.display())),
+            Err(e) => self.toast(ToastKind::Error, e),
+        }
+    }
+
+    /// Sets where the spreadsheet is saved (None = the app's exports folder) and re-exports.
+    pub fn set_export_dir(&mut self, dir: Option<PathBuf>) {
+        self.settings.export_dir = dir.map(|d| d.display().to_string()).unwrap_or_default();
+        self.settings.export_path.clear();
+        self.settings.export_prompted = true;
+        self.save_settings();
+        if self.settings.auto_export {
+            self.export(true);
         }
     }
 
@@ -294,6 +340,8 @@ impl App {
                 Reply::Autocomplete { seq, result } => self.add.on_autocomplete(seq, result),
                 Reply::Search { seq, result } => self.add.on_search(seq, result),
                 Reply::Import { seq, result } => self.import.on_result(seq, result),
+                Reply::Update { manual, result } => ui::update::on_checked(self, manual, result),
+                Reply::Installed(result) => ui::update::on_installed(self, ctx, result),
                 Reply::Image { url, result } => self.images.loaded(ctx, url, result),
                 Reply::Fx(result) => {
                     self.fx_loading = false;
@@ -377,6 +425,8 @@ impl eframe::App for App {
             Tab::Collection => ui::collection::show(self, ctx),
             Tab::Settings => ui::settings::show(self, ctx),
         }
+        ui::update::window(self, ctx);
+        ui::settings::export_prompt(self, ctx);
         widgets::show_toasts(ctx, &mut self.toasts, now);
     }
 }

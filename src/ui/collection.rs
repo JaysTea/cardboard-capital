@@ -128,6 +128,7 @@ struct Actions {
     refresh: bool,
     export: bool,
     open_xlsx: bool,
+    export_as: bool,
     open_folder: bool,
     dirty: bool,
 }
@@ -213,6 +214,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if act.open_xlsx {
         app.open_export();
     }
+    if act.export_as {
+        app.export_as();
+    }
     if act.open_folder {
         let path = app.export_path();
         let folder = path.parent().map(|p| p.to_path_buf()).unwrap_or(app.app_dir.clone());
@@ -237,6 +241,10 @@ fn toolbar(app: &mut App, ui: &mut Ui, act: &mut Actions) {
                 .on_hover_text("Open the folder the spreadsheet is saved in")
                 .clicked();
             act.open_xlsx |= ui.button("📄 Open sheet").clicked();
+            act.export_as |= ui
+                .button("Save copy as…")
+                .on_hover_text("Save a copy of the spreadsheet somewhere else (the usual one keeps updating)")
+                .clicked();
             act.export |= widgets::primary_button(ui, "⬇  Export XLSX").clicked();
             if *refresh_loading {
                 ui.spinner();

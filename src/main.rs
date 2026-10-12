@@ -9,6 +9,7 @@ mod model;
 mod scryfall;
 mod storage;
 mod ui;
+mod update;
 mod worker;
 
 use std::sync::Arc;
@@ -18,6 +19,14 @@ use std::sync::Arc;
 pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 fn main() -> eframe::Result<()> {
+    // `--pretend-version 1.1.0` makes update checks act as if this were that version (for testing).
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--pretend-version") {
+        if let Some(v) = args.get(i + 1) {
+            let _ = update::pretend_version(v);
+        }
+    }
+
     let icon_size = 64;
     let icon = egui::IconData {
         rgba: icon::rgba(icon_size),
