@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "cardboard_capital"
-version = "1.3.0-beta.1"
+version = "1.3.0-beta.2"
 dependencies = [
  "calamine",
  "chrono",

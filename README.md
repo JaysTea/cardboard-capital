@@ -6,7 +6,22 @@ Like a stock portfolio, you don't actually have the money; you just know that's 
 
 It currently supports **Magic: The Gathering** (card data and prices from [Scryfall](https://scryfall.com)). More TCGs are planned.
 
-*Having some fun with Vibe-Coding this Project*
+> 🎨 **The UI is a placeholder and will be improved.** The current screens are functional stand-ins; a proper design is in the works.
+
+### Who made this
+This project is openly **vibe-coded**: the code is written by an AI from a human's direction.
+
+| Role | Who | What that covers |
+|---|---|---|
+| Product & UI/UX Designer, System Designer | [JaysTea](https://github.com/JaysTea) | What the app does, how it should look and work, how its parts fit together, testing and release decisions |
+| Programmer (AI) | Claude (Anthropic), via Claude Code | Writing the code, tests and docs to that direction |
+
+### Planned features
+- **A proper UI design** for every screen (in progress)
+- **More trading card games** next to Magic, each with its own tile on Home
+- **Online accounts and cloud sync** (planned on Supabase), so your collection follows you between PCs
+- Collection value over time
+- An optional installer (Start menu shortcut, uninstall entry)
 
 ## Download
 
@@ -127,6 +142,7 @@ Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: inst
 | Beta of an upcoming version | pre-release suffix | 1.2.0-beta.1 → 1.2.0-beta.2 → 1.2.0 |
 
 **History**
+- v1.3.0-beta.2: Home screen laid out like the first design sketch (title with version, account top-left, settings top-right, total above the value bar, big sideways-scrolling tiles in real card proportions 63 × 88 that lift with a shadow on hover, floating Update button); README notes the UI is a placeholder, who made what, and planned features.
 - v1.3.0-beta.1: Home screen with a tile per game, its value and a Bar/Donut value chart; data moves to `Documents\Cardboard Capital` automatically (image cache to `%LOCALAPPDATA%`, `portable.txt` keeps it next to the app); safer saving (locked files aren't treated as corrupt, retries, no closing with unsaved changes), one copy at a time, more robust self-update; developer keys and a placeholder for online storage.
 - **v1.2.0:** stable release of everything in the 1.2.0 betas: in-app updates with Stable / Beta / Off channels, choose your currency (26 supported), import another install's spreadsheet, choose the spreadsheet folder, Save copy as….
 - v1.2.0-beta.3: the update button moved to a bar at the bottom right (it overlapped the Settings tab).

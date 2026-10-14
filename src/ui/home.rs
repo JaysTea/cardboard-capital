@@ -11,11 +11,15 @@ use egui::{
 use crate::app::{App, Screen};
 use crate::cloud;
 use crate::model::{self, Game, HomeChart, Value};
-use crate::ui::widgets::{self, bold, chip, game_color, ACCENT, CARD_ASPECT};
+use crate::ui::widgets::{self, bold, chip, game_color, ACCENT};
 
 /// Room the floating Update button takes at the bottom right, so toasts can sit above it.
 pub const UPDATE_HEIGHT: f32 = 76.0;
 const HEADER_HEIGHT: f32 = 68.0;
+/// Tiles have a real card's shape: 63 × 88 mm.
+const TILE_ASPECT: f32 = 63.0 / 88.0;
+/// How far a tile rises on hover.
+const LIFT: f32 = 10.0;
 const EMPTY: &str = "Add cards to see your collection's value";
 
 /// Settings' header: the way back, logo, name and version.
@@ -113,12 +117,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             ui.add_space(24.0);
         }
         // Tiles as tall as the screen allows, scrolling sideways when there are more games.
-        let tile_h = (ui.available_height() - 64.0).clamp(220.0, 620.0);
+        let tile_h = (ui.available_height() - 64.0 - LIFT).clamp(220.0, 620.0);
         egui::ScrollArea::horizontal().id_salt("game_tiles").show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 ui.add_space(24.0);
                 for (game, value) in &totals {
-                    if tile(ui, *game, value, tile_h * CARD_ASPECT).clicked() {
+                    if tile(ui, *game, value, tile_h * TILE_ASPECT).clicked() {
                         open = Some(*game);
                     }
                     ui.add_space(40.0);
@@ -212,12 +216,24 @@ fn account_panel(app: &mut App, ctx: &egui::Context) {
 fn tile(ui: &mut Ui, game: Game, value: &Value, width: f32) -> egui::Response {
     ui.vertical(|ui| {
         ui.set_width(width);
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, width / CARD_ASPECT), Sense::click());
+        // Room above the card to lift into.
+        ui.add_space(LIFT);
+        let (slot, resp) = ui.allocate_exact_size(vec2(width, width / TILE_ASPECT), Sense::click());
         let resp = resp
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(format!("Open {}", game.name()));
+        // Hovering lifts the card a little and deepens its shadow.
+        let t = ui.ctx().animate_bool_with_time(resp.id.with("lift"), resp.hovered(), 0.15);
+        let rect = slot.translate(vec2(0.0, -LIFT * t));
         let p = ui.painter();
         let radius = 12;
+        let shadow = egui::Shadow {
+            offset: [0, (6.0 + 10.0 * t) as i8],
+            blur: (14.0 + 18.0 * t) as u8,
+            spread: 0,
+            color: Color32::from_black_alpha((90.0 + 70.0 * t) as u8),
+        };
+        p.add(shadow.as_shape(rect, CornerRadius::same(radius)));
         p.rect_filled(rect, radius, game_color(game));
         let band = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 52.0), rect.max);
         p.rect_filled(
