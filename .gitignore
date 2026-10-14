@@ -1,1 +1,4 @@
 /target
+# Developer signing keys and developer keys never belong in the repo.
+*.pk8
+developer.key

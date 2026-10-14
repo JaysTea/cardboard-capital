@@ -1,5 +1,5 @@
-//! Update notifications: header chip, the "update available" window and the Settings section.
-//! Deliberately plain for now; the UI will be redesigned later.
+//! Update notifications: the bottom bar and Home button, the "update available" window and the
+//! Settings section. Deliberately plain for now; the UI will be redesigned later.
 
 use egui::{RichText, Ui};
 
@@ -38,10 +38,7 @@ pub fn on_checked(app: &mut App, manual: bool, result: Result<Option<UpdateInfo>
             app.update.installing = true;
             app.update.available = Some(info.clone());
             app.update.show_window = true;
-            let _ = app.worker.jobs.send(Job::InstallUpdate {
-                info,
-                data_dir: app.data_dir.clone(),
-            });
+            let _ = app.worker.jobs.send(Job::InstallUpdate { info });
         }
         Ok(Some(info)) => {
             let skipped = !manual && app.settings.skipped_version == info.tag;
@@ -75,15 +72,35 @@ pub fn on_checked(app: &mut App, manual: bool, result: Result<Option<UpdateInfo>
 pub fn on_installed(app: &mut App, ctx: &egui::Context, result: Result<std::path::PathBuf, String>) {
     match result {
         Ok(exe) => {
+            app.update.installing = false;
             app.save_now();
-            match std::process::Command::new(&exe).spawn() {
+            // Restarting now would stop at the "not saved" question while the new version waits.
+            if app.unsaved_error.is_some() {
+                app.update.show_window = false;
+                app.toast(
+                    ToastKind::Info,
+                    "Update installed. Restart the app to use it once your changes are saved.",
+                );
+                return;
+            }
+            // The new process waits for this one to release the single-instance lock.
+            match std::process::Command::new(&exe).arg(crate::AFTER_UPDATE).spawn() {
                 Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 Err(e) => {
-                    app.update.installing = false;
-                    app.toast(
-                        ToastKind::Info,
-                        format!("Update installed. Restart the app to use it ({e})."),
-                    );
+                    // The new exe won't start: put the running version back.
+                    let (_, old) = crate::update::staging(&exe);
+                    let restored = std::fs::rename(&exe, crate::update::staging(&exe).0)
+                        .and_then(|()| std::fs::rename(&old, &exe));
+                    let msg = match restored {
+                        Ok(()) => format!("The new version wouldn't start ({e}), so this version was kept."),
+                        Err(e2) => format!(
+                            "The new version wouldn't start ({e}) and the previous one couldn't be put back \
+                             ({e2}). It's at {}; rename it to {} to use it.",
+                            old.display(),
+                            exe.file_name().unwrap_or_default().to_string_lossy()
+                        ),
+                    };
+                    app.toast(ToastKind::Error, msg);
                 }
             }
         }
@@ -108,18 +125,22 @@ pub fn bar(app: &mut App, ctx: &egui::Context) {
             ui.horizontal_centered(|ui| {
                 let kind = if info.prerelease { "beta" } else { "version" };
                 ui.label(RichText::new(format!("A new {kind} of Cardboard Capital is available.")).weak());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = format!("⬆  Update to {}", info.tag);
-                    if ui
-                        .add(egui::Button::new(bold(label).color(egui::Color32::from_rgb(24, 20, 12))).fill(ACCENT))
-                        .on_hover_text("See what's new and install it")
-                        .clicked()
-                    {
-                        app.update.show_window = true;
-                    }
-                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| button(app, ui));
             });
         });
+}
+
+/// "⬆ Update to vX", shown while an update is waiting; opens the update window.
+pub fn button(app: &mut App, ui: &mut Ui) {
+    let Some(info) = &app.update.available else { return };
+    let label = format!("⬆  Update to {}", info.tag);
+    if ui
+        .add(egui::Button::new(bold(label).color(egui::Color32::from_rgb(24, 20, 12))).fill(ACCENT))
+        .on_hover_text("See what's new and install it")
+        .clicked()
+    {
+        app.update.show_window = true;
+    }
 }
 
 pub fn window(app: &mut App, ctx: &egui::Context) {
@@ -179,10 +200,7 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
         });
     if install {
         app.update.installing = true;
-        let _ = app.worker.jobs.send(Job::InstallUpdate {
-            info,
-            data_dir: app.data_dir.clone(),
-        });
+        let _ = app.worker.jobs.send(Job::InstallUpdate { info });
     } else if skip {
         app.settings.skipped_version = info.tag.clone();
         app.save_settings();

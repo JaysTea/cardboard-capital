@@ -7,6 +7,9 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=src/icon.rs");
     println!("cargo:rerun-if-changed=build.rs");
+    // Read with option_env! in src/cloud.rs.
+    println!("cargo:rerun-if-env-changed=CARDBOARD_CAPITAL_SUPABASE_URL");
+    println!("cargo:rerun-if-env-changed=CARDBOARD_CAPITAL_SUPABASE_ANON_KEY");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;

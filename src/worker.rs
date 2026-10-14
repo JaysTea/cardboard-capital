@@ -21,7 +21,6 @@ pub enum Job {
     },
     InstallUpdate {
         info: UpdateInfo,
-        data_dir: PathBuf,
     },
     Autocomplete {
         seq: u64,
@@ -193,9 +192,7 @@ fn run_job(client: &Client, job: Job) -> Reply {
             manual,
             result: update::check(client.agent(), channel),
         },
-        Job::InstallUpdate { info, data_dir } => {
-            Reply::Installed(update::install(client.agent(), &info, &data_dir))
-        }
+        Job::InstallUpdate { info } => Reply::Installed(update::install(client.agent(), &info)),
     }
 }
 

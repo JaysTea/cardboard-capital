@@ -1,24 +1,22 @@
 pub mod add;
 pub mod collection;
+pub mod home;
 pub mod import;
 pub mod settings;
 pub mod update;
 pub mod widgets;
 
-use egui::{Align, Layout, RichText};
+use egui::{Align, Color32, Layout, RichText};
 
-use crate::app::{App, Tab};
+use crate::app::{App, Screen, Tab};
+use crate::model::Game;
 
 use widgets::{bold, chip, ACCENT};
 
+/// The header of a game's screen: back to Home, the game's tabs, its total and the exchange rate.
 pub fn header(app: &mut App, ctx: &egui::Context) {
     let rate = app.rate();
-    let total_qty: u32 = app.collection.iter().map(|e| e.qty).sum();
-    let total: f64 = app
-        .collection
-        .iter()
-        .filter_map(|e| e.total_price(rate))
-        .sum();
+    let value = app.game_total(Game::Mtg);
 
     egui::TopBottomPanel::top("header")
         .frame(
@@ -26,6 +24,13 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                if ui
+                    .button("← Home")
+                    .on_hover_text("Home: all your games")
+                    .clicked()
+                {
+                    app.screen = Screen::Home;
+                }
                 ui.add(egui::Image::new((app.logo.id(), egui::vec2(26.0, 26.0))));
                 ui.label(bold("Cardboard Capital").size(20.0).color(ACCENT));
                 ui.label(RichText::new(crate::VERSION).weak());
@@ -73,7 +78,11 @@ pub fn header(app: &mut App, ctx: &egui::Context) {
                         chip(ui, "MANUAL", ACCENT, ACCENT.gamma_multiply(0.2));
                     }
                     ui.separator();
-                    ui.label(format!("{total_qty} cards · {}", crate::model::cur().fmt(total)));
+                    ui.label(format!("{} cards · {}", value.cards, crate::model::cur().fmt(value.total)));
+                    if let Some(why) = &app.collection_locked {
+                        let red = Color32::from_rgb(230, 80, 70);
+                        chip(ui, "NOT SAVING", red, red.gamma_multiply(0.2)).on_hover_text(why.as_str());
+                    }
                 });
             });
         });

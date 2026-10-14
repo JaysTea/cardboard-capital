@@ -19,20 +19,29 @@ It currently supports **Magic: The Gathering** (card data and prices from [Scryf
 The Releases page always lists the newest version first. Download **`Cardboard-Capital.exe`** from the release's *Assets*.
 
 ### Getting started
-1. Make a folder for the app (e.g. `Documents\Cardboard Capital`) and put `Cardboard-Capital.exe` in it.
+1. Put `Cardboard-Capital.exe` anywhere you like (e.g. a `Cardboard Capital` folder in Downloads or on your desktop). There's no installer and it doesn't need admin rights.
 2. Double-click it. On first run Windows may say **"Windows protected your PC"**. This happens because the app isn't code-signed by a big publisher. Click **More info → Run anyway**.
-3. The app creates two folders next to itself:
+3. The app opens on **Home**: a tile per card game (Magic for now) with what it's worth, and a chart of how your collection's value splits between games. Click a tile to add, import and browse that game's cards.
+
+Your data lives in your **Documents** folder (wherever Windows keeps it, including OneDrive):
 
 ```
-Cardboard Capital\
-  Cardboard-Capital.exe
-  data\       your collection, settings and image cache
-  exports\    Cardboard Capital.xlsx (your spreadsheet, kept up to date automatically)
+Documents\Cardboard Capital\
+  data\settings.json
+  data\mtg\collection.json   your Magic collection (+ collection.backup.json from the start of each session)
+  exports\                   Cardboard Capital.xlsx (your spreadsheet, kept up to date automatically)
+  account\                   only used for developer keys, for now
 ```
 
-To move the app or back it up, copy the whole folder. **Back up `data\`**: it holds your collection.
+**Back up `Documents\Cardboard Capital`**: it holds your collection. Downloaded card images are cached in `%LOCALAPPDATA%\Cardboard Capital` instead, so they don't fill up Documents or OneDrive.
 
-**Upgrading from MTG Stock Sheet** (the old name): put the new exe in your old folder and run it. Your collection, settings and spreadsheet are moved into `data\` and `exports\` automatically.
+**Keeping everything next to the app** (e.g. on a USB stick): put an empty file named `portable.txt` next to the exe. The app then uses `data\` and `exports\` next to itself instead of Documents. It doesn't move existing data there: copy the `data` folder from `Documents\Cardboard Capital` next to the exe first. Removing `portable.txt` later moves that data back to Documents automatically.
+
+**Upgrading from 1.2 or older** (including MTG Stock Sheet): run the new version from your old folder. Your collection and settings are moved to `Documents\Cardboard Capital` automatically. The old files are kept, renamed to `*.moved`, with a `WHERE IS MY DATA.txt` note. Versions before 1.3 look for data next to the exe, so they would start empty. If Documents already has a different collection (e.g. from a second copy of the app), nothing is merged or overwritten; you'll see a message instead.
+
+If Windows' ransomware protection (Controlled folder access) blocks the app from writing to Documents, the app tells you how to allow it (Windows Security → Virus & threat protection → Ransomware protection → Allow an app) and meanwhile keeps your data where it was.
+
+Only one copy of the app runs at a time, since every copy shares the same data.
 
 Needs Windows 10/11 (64-bit) and an internet connection for prices and images.
 
@@ -75,15 +84,20 @@ The app checks GitHub for new versions when it starts. Pick your channel in **Se
 - **Beta**: also get betas, with new features early.
 - **Off**: never check; stay on your version.
 
-When an update is available, a bar appears along the bottom of the window with an **Update** button at the right. **Install & restart** swaps in the new version; your `data` and `exports` are left alone. Switching from Beta back to Stable doesn't downgrade you: you move to the next stable release once it's newer. For an older version, download it from [Releases](https://github.com/JaysTea/cardboard-capital/releases).
+When an update is available, an **Update** button appears at the bottom right (on Home next to Settings, in a game in a bar along the bottom). **Install & restart** swaps in the new version; your data and spreadsheet are left alone. The app's own folder must be writable for this; otherwise download the new version from Releases. Switching from Beta back to Stable doesn't downgrade you: you move to the next stable release once it's newer. For an older version, download it from [Releases](https://github.com/JaysTea/cardboard-capital/releases).
 
 ### Prices
 - Prices are Scryfall's **USD (TCGplayer market)** price for each card's finish, converted to **your currency** with a **live exchange rate** (Frankfurter/ECB, falling back to ExchangeRate-API). Pick the currency in **Settings → Currency**; switching converts your manual prices too. A manual rate can also be set there.
 - If a price looks wrong, type your own in the **Manual** column in the Collection tab. Tick ✔ once you've cross-checked a row.
 - **Refresh prices** re-fetches everything.
 
+### Home and settings
+- **Home** shows each game's value under its tile and a chart of the split. Pick a **Bar** (across the top) or **Donut** (its own panel) in **Settings → Appearance**.
+- **Settings** opens from Home or from a game's Settings tab. **General** settings (currency, appearance, data folder, updates) apply to every game; each game has its own section below (for Magic: the spreadsheet and price refresh).
+- The 👤 button at the bottom right of Home is a placeholder for online accounts.
+
 ### The spreadsheet
-`exports\Cardboard Capital.xlsx` is rewritten after every change. On first run you're asked where it should live; change it any time in **Settings → Spreadsheet**. **Save copy as…** in the Collection tab saves a one-off copy elsewhere.
+`Documents\Cardboard Capital\exports\Cardboard Capital.xlsx` is rewritten after every change. The first time you open Magic you're asked where it should live; change it any time in **Settings → Spreadsheet**. **Save copy as…** in the Collection tab saves a one-off copy elsewhere.
 
 - **Collection sheet:** filters on every column; colour-coded rarities; foil rows tinted; valuable rows highlighted; Scryfall and TCGplayer links; dropdowns for Condition, Finish and Checked.
 - **Summary sheet:** the exchange rate in `B4`, plus totals and breakdowns by rarity, finish, condition and set.
@@ -94,8 +108,8 @@ The price columns (labelled with your currency, e.g. "Unit (SGD)") are formulas,
 
 ### Command line
 ```
-Cardboard-Capital.exe "Lightning Bolt" --printings   # start with a lookup, printings grid open
-Cardboard-Capital.exe --collection                   # open on the Collection tab
+Cardboard-Capital.exe "Lightning Bolt" --printings   # skip Home: start with a lookup, printings grid open
+Cardboard-Capital.exe --collection                   # skip Home: open on the Collection tab
 Cardboard-Capital.exe --import <deck link | list.txt | sheet.xlsx>  # open Import and read it
 Cardboard-Capital.exe --pretend-version 1.1.0        # act as an older version (to test updates)
 Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: install whatever update is found
@@ -113,6 +127,7 @@ Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: inst
 | Beta of an upcoming version | pre-release suffix | 1.2.0-beta.1 → 1.2.0-beta.2 → 1.2.0 |
 
 **History**
+- v1.3.0-beta.1: Home screen with a tile per game, its value and a Bar/Donut value chart; data moves to `Documents\Cardboard Capital` automatically (image cache to `%LOCALAPPDATA%`, `portable.txt` keeps it next to the app); safer saving (locked files aren't treated as corrupt, retries, no closing with unsaved changes), one copy at a time, more robust self-update; developer keys and a placeholder for online storage.
 - **v1.2.0:** stable release of everything in the 1.2.0 betas: in-app updates with Stable / Beta / Off channels, choose your currency (26 supported), import another install's spreadsheet, choose the spreadsheet folder, Save copy as….
 - v1.2.0-beta.3: the update button moved to a bar at the bottom right (it overlapped the Settings tab).
 - v1.2.0-beta.2: choose your currency (26 supported); manual prices and imported sheets are converted automatically.
@@ -122,13 +137,28 @@ Cardboard-Capital.exe --pretend-version 1.0.0 --install-update-now  # test: inst
 
 ## Development
 
-Requires Rust (stable, MSVC toolchain) and the Visual Studio C++ Build Tools.
+Requires Rust (stable, MSVC toolchain, 1.89+) and the Visual Studio C++ Build Tools.
 
 ```
 cargo test                      # unit tests
 cargo test -- --ignored live    # live Scryfall / Archidekt / exchange-rate checks
 cargo build --release           # target/release/cardboard_capital.exe
 ```
+
+Debug builds keep their data in `Documents\Cardboard Capital (dev)`, so trying out a change never touches your real collection. To try a build against a throwaway folder, set `CARDBOARD_CAPITAL_HOME` to an absolute path.
+
+### Developer keys
+A developer account is unlocked by a signed key file, `Documents\Cardboard Capital\account\developer.key`. The app checks its Ed25519 signature against the public keys in `src/account.rs`, so a key can't be faked from the (public) source. It only shows developer screens; it never changes your data or updates, and anything that needs real protection must be enforced by the server.
+
+```
+cargo run --example devkey -- gen                 # once: makes %APPDATA%\cardboard-capital-dev\signing.pk8, prints the public key for src/account.rs
+cargo run --example devkey -- sign "Your Name"    # writes Documents\Cardboard Capital\account\developer.key
+```
+
+Keep `signing.pk8` out of the repo (the tool refuses paths inside it; `*.pk8` is git-ignored) and back it up offline: anyone with it can make developer keys. To retire a key, remove its entry from `DEV_PUBLIC_KEYS`.
+
+### Cloud (planned)
+Online storage is planned on **Supabase** (Postgres), starting on the free tier. The draft schema is in [`supabase/migrations/`](supabase/migrations/); it's plain Postgres, so it moves to a paid plan or another host (Neon, RDS) with a dump and restore. Only developer accounts see the cloud settings for now, and a build connects to the project set at build time in `CARDBOARD_CAPITAL_SUPABASE_URL` and `CARDBOARD_CAPITAL_SUPABASE_ANON_KEY` (both unset today). The server decides who is a developer (`profiles.role`), never the local key.
 
 ### Branches and releases
 - `main` = stable. `beta` = features being tested.
@@ -151,15 +181,22 @@ git push origin main v1.2.0
 ### Code layout
 | File | Purpose |
 |---|---|
+| `src/main.rs` | Start-up: single-instance lock, finding and migrating the data, the window |
+| `src/app.rs` | App state, screens (Home / Settings / a game), saving |
 | `src/scryfall.rs` | API client (rate-limited), card model, treatment detection, price per finish |
 | `src/import.rs` | Deck link (Archidekt/Moxfield) and text list parsing, Scryfall matching |
 | `src/fx.rs` | USD → your currency exchange rate |
-| `src/model.rs` | Collection entries, merging, settings |
-| `src/storage.rs` | Folder layout, migration, JSON persistence |
+| `src/model.rs` | Games, collection entries, merging, totals, settings |
+| `src/storage.rs` | Where data lives, migration from older layouts, safe JSON persistence |
+| `src/account.rs` | Developer keys (Ed25519) |
+| `src/cloud.rs` | Placeholder for online storage on Supabase |
 | `src/update.rs` | GitHub release checks per channel, self-update |
 | `src/export.rs` | XLSX writer |
 | `src/worker.rs` | Background threads for API calls and image downloads |
-| `src/ui/` | egui screens: `add.rs`, `import.rs`, `collection.rs`, `settings.rs`, plus shared `widgets.rs` |
+| `src/icon.rs` | The app icon, drawn in code |
+| `src/ui/` | egui screens: `home.rs`, `add.rs`, `import.rs`, `collection.rs`, `settings.rs`, `update.rs`, plus shared `widgets.rs` |
+| `examples/devkey.rs` | Dev-only tool that makes developer keys |
+| `supabase/migrations/` | Draft database schema for the planned online storage |
 
 ## License
 

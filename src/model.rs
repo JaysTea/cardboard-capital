@@ -254,6 +254,91 @@ pub fn add_or_merge(collection: &mut Vec<Entry>, entry: Entry) -> (bool, u32) {
     }
 }
 
+/// Card count and value of a set of entries.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Value {
+    pub cards: u32,
+    /// In the user's currency. Entries without a price count as 0.
+    pub total: f64,
+    /// Entries without any price.
+    pub missing: usize,
+}
+
+pub fn collection_value<'a>(entries: impl IntoIterator<Item = &'a Entry>, rate: f64) -> Value {
+    let mut v = Value::default();
+    for e in entries {
+        v.cards += e.qty;
+        match e.total_price(rate) {
+            Some(t) => v.total += t,
+            None => v.missing += 1,
+        }
+    }
+    v
+}
+
+/// A trading card game with its own collection. Only Magic for now.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Game {
+    Mtg,
+}
+
+impl Game {
+    pub const ALL: [Game; 1] = [Game::Mtg];
+
+    /// Folder name under `data\`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Game::Mtg => "mtg",
+        }
+    }
+
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Game::Mtg => "MTG",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Game::Mtg => "Magic: The Gathering",
+        }
+    }
+}
+
+/// Each game's share of the total value, skipping games worth nothing. Empty when nothing has a value.
+pub fn value_shares(totals: &[(Game, f64)]) -> Vec<(Game, f64)> {
+    let sum: f64 = totals.iter().map(|(_, v)| v.max(0.0)).sum();
+    if sum <= 0.0 {
+        return Vec::new();
+    }
+    totals
+        .iter()
+        .filter(|(_, v)| *v > 0.0)
+        .map(|&(g, v)| (g, v / sum))
+        .collect()
+}
+
+/// How the home screen shows each game's share of the collection's value.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HomeChart {
+    /// A stacked bar above the game tiles.
+    #[default]
+    Bar,
+    /// A ring in its own panel.
+    Donut,
+}
+
+impl HomeChart {
+    pub const ALL: [HomeChart; 2] = [HomeChart::Bar, HomeChart::Donut];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            HomeChart::Bar => "Bar",
+            HomeChart::Donut => "Donut",
+        }
+    }
+}
+
 /// Which releases the app offers as updates.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UpdateChannel {
@@ -287,7 +372,7 @@ impl UpdateChannel {
 pub struct Settings {
     /// Legacy full path of the spreadsheet (pre-1.2). Used only when `export_dir` is empty.
     pub export_path: String,
-    /// Folder the spreadsheet is saved in. Empty = the app's `exports` folder.
+    /// Folder the spreadsheet is saved in. Empty = the default `exports` folder.
     pub export_dir: String,
     /// The "where should the spreadsheet go?" question has been answered.
     pub export_prompted: bool,
@@ -308,6 +393,7 @@ pub struct Settings {
     pub update_channel: Option<UpdateChannel>,
     /// Tag of an update the user chose to skip (e.g. "v1.2.0").
     pub skipped_version: String,
+    pub home_chart: HomeChart,
 }
 
 impl Default for Settings {
@@ -327,6 +413,7 @@ impl Default for Settings {
             dark_mode: true,
             update_channel: None,
             skipped_version: String::new(),
+            home_chart: HomeChart::Bar,
         }
     }
 }
@@ -555,6 +642,28 @@ mod tests {
         // Old settings files (no currency field) stay SGD.
         let s: Settings = serde_json::from_str("{\"fx_rate\": 1.3}").unwrap();
         assert_eq!(s.currency().code, "SGD");
+    }
+
+    #[test]
+    fn value_counts_missing_prices() {
+        let mut a = entry("a", Finish::NonFoil, Condition::NM, 2);
+        a.usd = Some(1.0);
+        let mut b = entry("b", Finish::NonFoil, Condition::NM, 1);
+        b.manual_price = Some(5.0);
+        let c = entry("c", Finish::NonFoil, Condition::NM, 4);
+        let v = collection_value(&[a, b, c], 2.0);
+        assert_eq!(v, Value { cards: 7, total: 9.0, missing: 1 });
+        assert_eq!(collection_value(&[], 2.0), Value::default());
+    }
+
+    #[test]
+    fn shares() {
+        assert!(value_shares(&[]).is_empty());
+        assert!(value_shares(&[(Game::Mtg, 0.0)]).is_empty());
+        assert_eq!(value_shares(&[(Game::Mtg, 12.5)]), vec![(Game::Mtg, 1.0)]);
+        // Old settings files have no chart choice.
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.home_chart, HomeChart::Bar);
     }
 
     #[test]

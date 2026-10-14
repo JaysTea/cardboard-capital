@@ -1,10 +1,17 @@
-//! "Settings" tab.
+//! Settings, opened from Home or a game's Settings tab: general settings first, then each game's.
 
 use egui::{RichText, Ui};
 
 use crate::app::App;
+use crate::cloud::{self, CloudStatus};
+use crate::model::HomeChart;
 use crate::storage;
 use crate::ui::widgets::{self, bold};
+
+fn group(ui: &mut Ui, title: &str) {
+    ui.add_space(22.0);
+    ui.label(bold(title).size(21.0).color(widgets::ACCENT));
+}
 
 fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.add_space(14.0);
@@ -35,12 +42,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.set_max_width(760.0);
             let export_path = app.export_path();
-            let data_dir = app.data_dir.clone();
-            let app_dir = app.app_dir.clone();
+            let paths = app.paths.clone();
             let fx_loading = app.fx_loading;
             let pending = app.pending_currency.clone();
             let s = &mut app.settings;
 
+            group(ui, "General");
             let cur = s.currency();
             section(ui, "Currency", |ui| {
                 ui.horizontal(|ui| {
@@ -118,6 +125,78 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 );
             });
 
+            section(ui, "Appearance", |ui| {
+                ui.horizontal(|ui| {
+                    settings_changed |= ui.selectable_value(&mut s.dark_mode, true, "🌙 Dark").changed();
+                    settings_changed |= ui.selectable_value(&mut s.dark_mode, false, "☀ Light").changed();
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Home screen value chart");
+                    for c in HomeChart::ALL {
+                        settings_changed |= ui.selectable_value(&mut s.home_chart, c, c.label()).changed();
+                    }
+                });
+                ui.label(
+                    RichText::new("Bar: across the top of Home. Donut: in its own panel on the right.")
+                        .small()
+                        .weak(),
+                );
+            });
+
+            section(ui, "Data", |ui| {
+                if paths.legacy {
+                    widgets::warning(
+                        ui,
+                        "For now the app is using its old data folder next to the app (see the message shown at start-up).",
+                    );
+                }
+                ui.label("Your collection and settings are saved in:");
+                ui.label(RichText::new(paths.root.display().to_string()).monospace());
+                ui.label(
+                    RichText::new(format!(
+                        "Back up this folder. A copy from the start of each session is kept as collection.backup.json. \
+                         The app itself can live anywhere; to keep everything next to it instead (e.g. on a USB \
+                         stick), put a file named {} next to the app (copy this folder's data folder there first).",
+                        storage::PORTABLE_MARKER
+                    ))
+                    .small()
+                    .weak(),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("📁 Open Cardboard Capital folder").clicked() {
+                        let _ = open::that_detached(&paths.root);
+                    }
+                    if ui.button("📁 Open app folder").clicked() {
+                        let _ = open::that_detached(&paths.exe_dir);
+                    }
+                    if ui.button("Clear image cache").clicked() {
+                        let _ = std::fs::remove_dir_all(&paths.cache);
+                        let _ = std::fs::create_dir_all(&paths.cache);
+                    }
+                });
+            });
+
+            section(ui, "Updates", |ui| crate::ui::update::settings_section(app, ui));
+
+            if app.account.is_developer() {
+                developer_sections(app, ui, &paths);
+            }
+
+            section(ui, "About", |ui| {
+                ui.label(bold(format!("Cardboard Capital {}", crate::VERSION)));
+                ui.label("Card data, images and prices from Scryfall (scryfall.com). Exchange rates from Frankfurter (ECB) with ExchangeRate-API as a fallback.");
+                ui.label(
+                    RichText::new(
+                        "Magic: The Gathering is © Wizards of the Coast. This tool isn't affiliated with Wizards of the Coast or Scryfall.",
+                    )
+                    .small()
+                    .weak(),
+                );
+            });
+
+            group(ui, "Magic: The Gathering");
+            let s = &mut app.settings;
             section(ui, "Spreadsheet", |ui| {
                 ui.label("Your spreadsheet is saved as");
                 ui.horizontal_wrapped(|ui| {
@@ -130,7 +209,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             new_export_dir = Some(Some(dir));
                         }
                     }
-                    if custom && ui.button("Use the app's exports folder").clicked() {
+                    if custom && ui.button("Use the default folder").clicked() {
                         new_export_dir = Some(None);
                     }
                     if ui.button("Open folder").clicked() {
@@ -169,54 +248,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 );
             });
 
-            section(ui, "Appearance", |ui| {
+            section(ui, "Prices", |ui| {
                 ui.horizontal(|ui| {
-                    settings_changed |= ui.selectable_value(&mut s.dark_mode, true, "🌙 Dark").changed();
-                    settings_changed |= ui.selectable_value(&mut s.dark_mode, false, "☀ Light").changed();
-                });
-            });
-
-            section(ui, "Data", |ui| {
-                ui.label("Your collection and settings are saved in the app's data folder:");
-                ui.label(RichText::new(data_dir.join("collection.json").display().to_string()).monospace());
-                ui.label(
-                    RichText::new(
-                        "A copy from the start of each session is kept as collection.backup.json. \
-                         To move the app, move its whole folder (the exe plus data and exports).",
-                    )
-                    .small()
-                    .weak(),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("📁 Open data folder").clicked() {
-                        let _ = open::that_detached(&data_dir);
-                    }
-                    if ui.button("📁 Open app folder").clicked() {
-                        let _ = open::that_detached(&app_dir);
-                    }
                     if ui.button("🔄 Refresh all prices").clicked() {
                         refresh = true;
                     }
-                    if ui.button("🧹 Clear image cache").clicked() {
-                        let _ = std::fs::remove_dir_all(storage::cache_dir(&data_dir));
-                        let _ = std::fs::create_dir_all(storage::cache_dir(&data_dir));
-                    }
+                    ui.label(RichText::new("Re-fetches every card's price from Scryfall.").small().weak());
                 });
             });
-
-            section(ui, "Updates", |ui| crate::ui::update::settings_section(app, ui));
-
-            section(ui, "About", |ui| {
-                ui.label(bold(format!("Cardboard Capital {}", crate::VERSION)));
-                ui.label("Card data, images and prices from Scryfall (scryfall.com). Exchange rates from Frankfurter (ECB) with ExchangeRate-API as a fallback.");
-                ui.label(
-                    RichText::new(
-                        "Magic: The Gathering is © Wizards of the Coast. This tool isn't affiliated with Wizards of the Coast or Scryfall.",
-                    )
-                    .small()
-                    .weak(),
-                );
-            });
+            ui.add_space(20.0);
         });
     });
 
@@ -246,6 +286,61 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// Shown only with a developer key: key details, where things live, and the cloud placeholder.
+fn developer_sections(app: &App, ui: &mut Ui, paths: &storage::Paths) {
+    section(ui, "Developer", |ui| {
+        let acc = &app.account;
+        ui.label(bold(format!("Developer key: {} (key {}, issued {})", acc.name, acc.key_id, acc.issued)));
+        ui.label(
+            RichText::new("Shows developer screens only; it doesn't change your data or updates.")
+                .small()
+                .weak(),
+        );
+        ui.add_space(4.0);
+        egui::Grid::new("dev_paths").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+            for (label, path) in [
+                ("Data", &paths.root),
+                ("Settings", &paths.settings_dir),
+                ("MTG collection", &paths.mtg_dir),
+                ("Account", &paths.account),
+                ("Image cache", &paths.cache),
+                ("Machine-local", &paths.local),
+                ("App", &paths.exe_dir),
+            ] {
+                ui.label(RichText::new(label).weak());
+                ui.label(RichText::new(path.display().to_string()).monospace());
+                ui.end_row();
+            }
+        });
+        if ui.button("📁 Open account folder").clicked() {
+            let _ = std::fs::create_dir_all(&paths.account);
+            let _ = open::that_detached(&paths.account);
+        }
+    });
+
+    section(ui, "Cloud (developer preview)", |ui| {
+        let status = cloud::status(&app.account);
+        ui.label(bold(status.describe()));
+        ui.label(
+            RichText::new(
+                "Online storage is planned on Supabase. Builds connect to the project set in \
+                 CARDBOARD_CAPITAL_SUPABASE_URL and CARDBOARD_CAPITAL_SUPABASE_ANON_KEY when they're built.",
+            )
+            .small()
+            .weak(),
+        );
+        ui.horizontal(|ui| {
+            let ready = status == CloudStatus::Ready;
+            let _ = ui.add_enabled(false, egui::Button::new("Sign in")).on_disabled_hover_text(if ready {
+                "Coming next"
+            } else {
+                "Supabase isn't configured yet"
+            });
+            let _ = ui.add_enabled(false, egui::Button::new("🔄 Sync now"));
+        });
+    });
+}
+
 /// Asks once where the spreadsheet should be saved.
 pub fn export_prompt(app: &mut App, ctx: &egui::Context) {
     if app.settings.export_prompted {
@@ -257,7 +352,7 @@ pub fn export_prompt(app: &mut App, ctx: &egui::Context) {
         app.save_settings();
         return;
     }
-    let default = storage::default_export_path(&app.app_dir);
+    let default = app.paths.default_export_path();
     let mut choice: Option<Option<std::path::PathBuf>> = None;
     egui::Window::new("Where should your spreadsheet go?")
         .collapsible(false)

@@ -11,6 +11,8 @@ use serde::Deserialize;
 use crate::model::UpdateChannel;
 
 pub const REPO: &str = "JaysTea/cardboard-capital";
+/// The release asset that is the app itself.
+const ASSET: &str = "Cardboard-Capital.exe";
 
 pub fn releases_page() -> String {
     format!("https://github.com/{REPO}/releases")
@@ -75,7 +77,7 @@ pub fn pick(releases: &[Release], channel: UpdateChannel, current: &Version) -> 
         .filter(|r| !r.draft && (channel == UpdateChannel::Beta || !r.prerelease))
         .filter_map(|r| {
             let version = Version::parse(r.tag_name.trim_start_matches('v')).ok()?;
-            let asset = r.assets.iter().find(|a| a.name.to_lowercase().ends_with(".exe"))?;
+            let asset = r.assets.iter().find(|a| a.name.eq_ignore_ascii_case(ASSET))?;
             Some(UpdateInfo {
                 version,
                 tag: r.tag_name.clone(),
@@ -110,25 +112,37 @@ pub fn check(agent: &ureq::Agent, channel: UpdateChannel) -> Result<Option<Updat
     Ok(pick(&releases, channel, &current_version()))
 }
 
-fn update_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("update")
-}
-
-/// Removes the previous exe left behind by the last update (it can't be deleted while running).
-pub fn cleanup(data_dir: &Path) {
-    let _ = std::fs::remove_file(update_dir(data_dir).join("old.exe"));
-    let _ = std::fs::remove_file(update_dir(data_dir).join("new.exe"));
+/// Where an update is staged: `(<exe>.new, <exe>.old)`, next to the exe. Windows only lets a
+/// running exe be renamed within its own drive, so these can't live in the data folder.
+/// Leftovers are deleted on the next start (see `storage::boot`).
+pub fn staging(exe: &Path) -> (PathBuf, PathBuf) {
+    let with = |suffix: &str| {
+        let mut name = exe.file_name().unwrap_or_default().to_os_string();
+        name.push(suffix);
+        exe.with_file_name(name)
+    };
+    (with(".new"), with(".old"))
 }
 
 /// Downloads the update and puts it in place of the running exe. Returns the exe path to launch.
-/// The running exe is moved to `data\update\old.exe` (Windows allows renaming a running exe)
-/// and deleted on the next start. Data and exports aren't touched.
-pub fn install(agent: &ureq::Agent, info: &UpdateInfo, data_dir: &Path) -> Result<PathBuf, String> {
+/// The running exe is renamed to `<exe>.old` (Windows allows renaming a running exe) and
+/// deleted on the next start. Data and exports aren't touched.
+pub fn install(agent: &ureq::Agent, info: &UpdateInfo) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("Can't find the running app: {e}"))?;
-    let dir = update_dir(data_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Can't create {}: {e}", dir.display()))?;
-    let new_path = dir.join("new.exe");
-    let old_path = dir.join("old.exe");
+    let (new_path, old_path) = staging(&exe);
+    let folder = exe.parent().unwrap_or(Path::new(".")).display().to_string();
+
+    // Check the folder can be written before downloading anything.
+    if let Err(e) = std::fs::write(&new_path, b"") {
+        return Err(if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "The app's folder ({folder}) can't be changed, so it can't update itself. Download the new \
+                 version from the Releases page, or move the app to a folder you own."
+            )
+        } else {
+            format!("Can't write to {folder}: {e}")
+        });
+    }
 
     let resp = agent
         .get(&info.asset_url)
@@ -140,15 +154,35 @@ pub fn install(agent: &ureq::Agent, info: &UpdateInfo, data_dir: &Path) -> Resul
         .read_to_end(&mut bytes)
         .map_err(|e| format!("Download failed: {e}"))?;
     if !bytes.starts_with(b"MZ") || (info.asset_size > 0 && bytes.len() as u64 != info.asset_size) {
+        let _ = std::fs::remove_file(&new_path);
         return Err("The downloaded file doesn't look like a complete app. Nothing was changed.".into());
     }
-    std::fs::write(&new_path, &bytes).map_err(|e| format!("Can't save the download: {e}"))?;
+    let written = std::fs::File::create(&new_path).and_then(|mut f| {
+        std::io::Write::write_all(&mut f, &bytes)?;
+        f.sync_all()
+    });
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&new_path);
+        return Err(format!("Can't save the download: {e}"));
+    }
+    // Antivirus may have removed it in the meantime.
+    if !new_path.is_file() {
+        return Err("The downloaded update disappeared (an antivirus may have removed it). Nothing was changed.".into());
+    }
 
     let _ = std::fs::remove_file(&old_path);
     std::fs::rename(&exe, &old_path).map_err(|e| format!("Can't move the current app aside: {e}"))?;
     if let Err(e) = std::fs::rename(&new_path, &exe) {
-        let _ = std::fs::rename(&old_path, &exe); // put the original back
-        return Err(format!("Can't put the new version in place: {e}"));
+        // Put the original back.
+        return Err(match std::fs::rename(&old_path, &exe) {
+            Ok(()) => format!("Can't put the new version in place: {e}. Nothing was changed."),
+            Err(e2) => format!(
+                "Can't put the new version in place: {e}. Restoring the current version failed too ({e2}): \
+                 it's now at {}. Rename it back to {} to use it.",
+                old_path.display(),
+                exe.file_name().unwrap_or_default().to_string_lossy()
+            ),
+        });
     }
     Ok(exe)
 }
@@ -207,6 +241,24 @@ mod tests {
         // v1.1.5 has no exe so it's never offered.
         let u = pick(&releases()[4..], UpdateChannel::Stable, &v("1.1.0"));
         assert_eq!(u, None);
+    }
+
+    #[test]
+    fn only_the_app_itself_is_downloaded() {
+        let rel: Vec<Release> = serde_json::from_str(
+            r#"[{"tag_name": "v2.0.0", "html_url": "u", "assets": [
+                {"name": "devkey.exe", "browser_download_url": "wrong"},
+                {"name": "cardboard-capital.EXE", "browser_download_url": "right"}]}]"#,
+        )
+        .unwrap();
+        assert_eq!(pick(&rel, UpdateChannel::Stable, &v("1.0.0")).unwrap().asset_url, "right");
+    }
+
+    #[test]
+    fn staged_next_to_the_exe() {
+        let (new, old) = staging(Path::new(r"D:\Apps\Cardboard-Capital.exe"));
+        assert_eq!(new, Path::new(r"D:\Apps\Cardboard-Capital.exe.new"));
+        assert_eq!(old, Path::new(r"D:\Apps\Cardboard-Capital.exe.old"));
     }
 
     /// `cargo test -- --ignored live`

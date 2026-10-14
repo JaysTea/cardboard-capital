@@ -47,6 +47,6 @@ jobs:
           make_latest: ${{ !contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
-            **Download `Cardboard-Capital.exe`** below, put it in its own folder and run it. It creates `data\` and `exports\` next to itself.
+            **Download `Cardboard-Capital.exe`** below, put it anywhere and run it (no installer needed). Your collection, settings and spreadsheet live in `Documents\Cardboard Capital`. Upgrading from 1.2 or older: update from inside the app, or run the new exe from your old folder, and your data is moved there automatically (the old files are kept as `*.moved`).
             Windows may say "Windows protected your PC": click **More info → Run anyway** (the app isn't code-signed).
-            ${{ contains(github.ref_name, '-') && '⚠️ This is a **beta**: new features being tested. Back up your `data` folder first.' || '' }}
+            ${{ contains(github.ref_name, '-') && '⚠️ This is a **beta**: new features being tested. Back up `Documents\Cardboard Capital` (or your old `data` folder) first.' || '' }}

@@ -55,6 +55,9 @@ const C_ID: u16 = 21;
 const USD_FMT: &str = "\"$\"#,##0.00";
 
 pub fn export(path: &Path, entries: &[Entry], settings: &Settings) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
+    }
     build(path, entries, settings).map_err(|e| match e {
         XlsxError::IoError(io) => format!(
             "Couldn't write {}: {io}. If the sheet is open in Excel/LibreOffice, close it and export again.",

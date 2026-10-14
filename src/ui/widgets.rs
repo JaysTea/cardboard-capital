@@ -9,7 +9,7 @@ use egui::{
 };
 
 use crate::app::Images;
-use crate::model::rarity_label;
+use crate::model::{rarity_label, Game};
 
 pub const ACCENT: Color32 = Color32::from_rgb(214, 162, 58);
 /// Width / height of a Magic card.
@@ -54,6 +54,18 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// Text in the bold font family.
 pub fn bold(text: impl Into<String>) -> RichText {
     RichText::new(text).family(FontFamily::Name(BOLD.into()))
+}
+
+/// The bold font, for painting text directly.
+pub fn bold_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(BOLD.into()))
+}
+
+/// Each game's colour on the home screen's tiles and chart.
+pub fn game_color(game: Game) -> Color32 {
+    match game {
+        Game::Mtg => Color32::from_rgb(196, 84, 56),
+    }
 }
 
 pub fn apply_theme(ctx: &egui::Context, dark: bool) {

@@ -6,7 +6,7 @@ use egui::{Align, Align2, Layout, RichText, Sense, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
 
 use crate::app::{App, Images};
-use crate::model::{parse_money, Condition, Entry, Finish, RarityFilter};
+use crate::model::{collection_value, parse_money, Condition, Entry, Finish, RarityFilter};
 use crate::ui::widgets::{self, bold, ToastKind, ACCENT, CARD_ASPECT};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -151,36 +151,24 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(14, 7)),
         )
         .show(ctx, |ui| {
-            let sum = |idx: &mut dyn Iterator<Item = &Entry>| -> (u32, f64, usize) {
-                let mut q = 0;
-                let mut s = 0.0;
-                let mut missing = 0;
-                for e in idx {
-                    q += e.qty;
-                    match e.total_price(rate) {
-                        Some(t) => s += t,
-                        None => missing += 1,
-                    }
-                }
-                (q, s, missing)
-            };
-            let (fq, fs, fmissing) = sum(&mut rows.iter().map(|&i| &app.collection[i]));
-            let (tq, ts, _) = sum(&mut app.collection.iter());
+            let shown = collection_value(rows.iter().map(|&i| &app.collection[i]), rate);
+            let all = collection_value(&app.collection, rate);
             ui.horizontal(|ui| {
                 ui.label(format!(
                     "Showing {} of {} entries · {} cards · ",
                     rows.len(),
                     app.collection.len(),
-                    fq
+                    shown.cards
                 ));
-                ui.label(bold(crate::model::cur().fmt(fs)).color(ACCENT));
-                if fmissing > 0 {
-                    ui.label(RichText::new(format!("· {fmissing} without a price")).weak());
+                ui.label(bold(crate::model::cur().fmt(shown.total)).color(ACCENT));
+                if shown.missing > 0 {
+                    ui.label(RichText::new(format!("· {} without a price", shown.missing)).weak());
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(bold(format!(
-                        "Collection total: {tq} cards · {}",
-                        crate::model::cur().fmt(ts)
+                        "Collection total: {} cards · {}",
+                        all.cards,
+                        crate::model::cur().fmt(all.total)
                     )));
                 });
             });
@@ -219,7 +207,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     if act.open_folder {
         let path = app.export_path();
-        let folder = path.parent().map(|p| p.to_path_buf()).unwrap_or(app.app_dir.clone());
+        let folder = path.parent().map(|p| p.to_path_buf()).unwrap_or(app.paths.exports.clone());
         let _ = std::fs::create_dir_all(&folder);
         let _ = open::that_detached(&folder);
     }
