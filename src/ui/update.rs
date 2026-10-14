@@ -19,6 +19,8 @@ pub struct UpdateState {
     pub auto_install: bool,
     /// Result of the last check, shown in Settings.
     pub status: String,
+    /// The Home screen's update button was closed for this session.
+    pub dismissed: bool,
 }
 
 pub fn check(app: &mut App, manual: bool) {

@@ -586,7 +586,7 @@ impl eframe::App for App {
         ui::update::window(self, ctx);
         self.unsaved_window(ctx);
         let toast_lift = match self.screen {
-            Screen::Home => ui::home::BAR_HEIGHT,
+            Screen::Home if self.update.available.is_some() && !self.update.dismissed => ui::home::UPDATE_HEIGHT,
             Screen::Game(_) if self.update.available.is_some() => ui::update::BAR_HEIGHT,
             _ => 0.0,
         };

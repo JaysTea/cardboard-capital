@@ -1,11 +1,11 @@
-//! Home: a tile per game with its value, a chart of how the value splits between games, and
-//! only Settings, Update and the account button. Plain for now; the UI will be designed later.
+//! Home: the total and its split between games, a tile per game with its value, and only the
+//! account, Settings and Update buttons. A placeholder layout until the real design is in.
 
 use std::f32::consts::TAU;
 
 use egui::{
     pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Pos2, Rect,
-    RichText, Sense, Shape, Stroke, StrokeKind, Ui,
+    RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder,
 };
 
 use crate::app::{App, Screen};
@@ -13,18 +13,18 @@ use crate::cloud;
 use crate::model::{self, Game, HomeChart, Value};
 use crate::ui::widgets::{self, bold, chip, game_color, ACCENT, CARD_ASPECT};
 
-/// Height of the bottom bar, so toasts can sit above it.
-pub const BAR_HEIGHT: f32 = 48.0;
-const TILE_WIDTH: f32 = 170.0;
+/// Room the floating Update button takes at the bottom right, so toasts can sit above it.
+pub const UPDATE_HEIGHT: f32 = 76.0;
+const HEADER_HEIGHT: f32 = 68.0;
 const EMPTY: &str = "Add cards to see your collection's value";
 
-/// Logo, name and version. On the Settings screen also the way back.
+/// Settings' header: the way back, logo, name and version.
 pub fn top_bar(app: &mut App, ctx: &egui::Context) {
-    egui::TopBottomPanel::top("home_header")
+    egui::TopBottomPanel::top("settings_header")
         .frame(Frame::side_top_panel(&ctx.style()).inner_margin(Margin::symmetric(16, 10)))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if app.screen == Screen::Settings && ui.button("← Home").clicked() {
+                if ui.button("← Home").clicked() {
                     app.screen = Screen::Home;
                 }
                 ui.add(egui::Image::new((app.logo.id(), vec2(26.0, 26.0))));
@@ -34,11 +34,49 @@ pub fn top_bar(app: &mut App, ctx: &egui::Context) {
         });
 }
 
+/// Account on the left, the name with the version under it in the middle, Settings on the right.
+fn header(app: &mut App, ctx: &egui::Context) {
+    egui::TopBottomPanel::top("home_header")
+        .exact_height(HEADER_HEIGHT)
+        .frame(Frame::side_top_panel(&ctx.style()).inner_margin(Margin::symmetric(16, 8)))
+        .show(ctx, |ui| {
+            let r = ui.max_rect();
+            let side = |left: bool| {
+                let w = 160.0;
+                let x = if left { r.left() } else { r.right() - w };
+                Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()))
+            };
+            ui.allocate_new_ui(UiBuilder::new().max_rect(side(true)).layout(Layout::left_to_right(Align::Center)), |ui| {
+                let account = ui
+                    .add(egui::Button::new(RichText::new("👤").size(20.0)).corner_radius(18).min_size(vec2(38.0, 36.0)))
+                    .on_hover_text("Account");
+                if account.clicked() {
+                    app.account_open = !app.account_open;
+                }
+                if app.account.is_developer() {
+                    chip(ui, "DEV", ACCENT, ACCENT.gamma_multiply(0.2));
+                }
+            });
+            ui.allocate_new_ui(UiBuilder::new().max_rect(r).layout(Layout::top_down(Align::Center)), |ui| {
+                ui.label(bold("Cardboard Capital").size(24.0).color(ACCENT));
+                ui.label(RichText::new(crate::VERSION).small().weak());
+            });
+            ui.allocate_new_ui(UiBuilder::new().max_rect(side(false)).layout(Layout::right_to_left(Align::Center)), |ui| {
+                if ui.add(egui::Button::new(RichText::new("⚙").size(20.0)).min_size(vec2(38.0, 36.0))).on_hover_text("Settings").clicked() {
+                    app.screen = Screen::Settings;
+                }
+                // Placeholder from the design sketch; what it does is still to be decided.
+                ui.add_enabled(false, egui::Button::new(RichText::new("↔").size(20.0)).min_size(vec2(38.0, 36.0)))
+                    .on_disabled_hover_text("Coming soon");
+            });
+        });
+}
+
 pub fn show(app: &mut App, ctx: &egui::Context) {
-    top_bar(app, ctx);
-    bottom_bar(app, ctx);
+    header(app, ctx);
 
     let totals: Vec<(Game, Value)> = Game::ALL.iter().map(|&g| (g, app.game_total(g))).collect();
+    let grand: f64 = totals.iter().map(|(_, v)| v.total).sum();
     let mut open = None;
     if app.settings.home_chart == HomeChart::Donut {
         egui::SidePanel::right("home_chart")
@@ -54,62 +92,81 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             });
     }
     egui::CentralPanel::default().show(ctx, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(14.0);
-            if app.settings.home_chart == HomeChart::Bar {
-                ui.label(bold("Collection value").size(17.0));
-                ui.add_space(4.0);
-                stacked_bar(ui, &totals, 28.0);
-                ui.add_space(4.0);
-                legend(ui, &totals);
-                ui.add_space(22.0);
-            }
-            ui.label(bold("Your games").size(17.0));
+        ui.add_space(12.0);
+        if app.settings.home_chart == HomeChart::Bar {
+            ui.vertical_centered(|ui| {
+                ui.label(bold(model::cur().fmt(grand)).size(26.0));
+            });
             ui.add_space(6.0);
-            egui::ScrollArea::horizontal().id_salt("game_tiles").show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    for (game, value) in &totals {
-                        if tile(ui, *game, value).clicked() {
-                            open = Some(*game);
-                        }
-                        ui.add_space(10.0);
-                    }
+            // The bar at 70% of the width, centred, with the (?) key to its right.
+            let w = ui.available_width();
+            let bar_w = (w * 0.7).max(200.0);
+            ui.horizontal(|ui| {
+                ui.add_space((w - bar_w) / 2.0);
+                ui.allocate_ui(vec2(bar_w, 22.0), |ui| stacked_bar(ui, &totals, 22.0));
+                ui.add_space(8.0);
+                ui.label(RichText::new("(?)").weak()).on_hover_ui(|ui| {
+                    legend(ui, &totals);
+                    ui.label(RichText::new("Bar or Donut: Settings → Appearance.").small().weak());
                 });
+            });
+            ui.add_space(24.0);
+        }
+        // Tiles as tall as the screen allows, scrolling sideways when there are more games.
+        let tile_h = (ui.available_height() - 64.0).clamp(220.0, 620.0);
+        egui::ScrollArea::horizontal().id_salt("game_tiles").show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.add_space(24.0);
+                for (game, value) in &totals {
+                    if tile(ui, *game, value, tile_h * CARD_ASPECT).clicked() {
+                        open = Some(*game);
+                    }
+                    ui.add_space(40.0);
+                }
             });
         });
     });
+    update_button(app, ctx);
     account_panel(app, ctx);
     if let Some(game) = open {
         app.screen = Screen::Game(game);
     }
 }
 
-/// Settings, Update (when there is one) and the account button in the bottom-right corner.
-fn bottom_bar(app: &mut App, ctx: &egui::Context) {
-    egui::TopBottomPanel::bottom("home_bar")
-        .exact_height(BAR_HEIGHT)
-        .frame(Frame::side_top_panel(&ctx.style()).inner_margin(Margin::symmetric(14, 6)))
+/// Floating at the bottom right while an update is waiting: Update (with the version) and ✕.
+fn update_button(app: &mut App, ctx: &egui::Context) {
+    let Some(info) = app.update.available.clone() else { return };
+    if app.update.dismissed {
+        return;
+    }
+    egui::Area::new(egui::Id::new("home_update"))
+        .anchor(Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+        .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let account = ui
-                    .add(egui::Button::new(RichText::new("👤").size(18.0)).corner_radius(16).min_size(vec2(34.0, 32.0)))
-                    .on_hover_text("Account");
-                if account.clicked() {
-                    app.account_open = !app.account_open;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let dark = Color32::from_rgb(24, 20, 12);
+                let label = RichText::new(format!("⬆  Update\n{}", info.tag)).color(dark).strong().size(16.0);
+                if ui
+                    .add(egui::Button::new(label).fill(Color32::from_rgb(240, 214, 60)).min_size(vec2(150.0, 56.0)))
+                    .on_hover_text("See what's new and install it")
+                    .clicked()
+                {
+                    app.update.show_window = true;
                 }
-                if app.account.is_developer() {
-                    chip(ui, "DEV", ACCENT, ACCENT.gamma_multiply(0.2));
+                let close = RichText::new("×").color(Color32::WHITE).size(18.0);
+                if ui
+                    .add(egui::Button::new(close).fill(Color32::from_rgb(214, 72, 52)).min_size(vec2(40.0, 56.0)))
+                    .on_hover_text("Hide until next time (still in Settings → Updates)")
+                    .clicked()
+                {
+                    app.update.dismissed = true;
                 }
-                ui.add_space(6.0);
-                if ui.button(RichText::new("⚙  Settings").size(15.0)).clicked() {
-                    app.screen = Screen::Settings;
-                }
-                crate::ui::update::button(app, ui);
             });
         });
 }
 
-/// A small window above the account button. Online accounts are a placeholder for now.
+/// A small window under the account button. Online accounts are a placeholder for now.
 fn account_panel(app: &mut App, ctx: &egui::Context) {
     if !app.account_open {
         return;
@@ -120,7 +177,7 @@ fn account_panel(app: &mut App, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(false)
         .default_width(320.0)
-        .anchor(Align2::RIGHT_BOTTOM, [-16.0, -(BAR_HEIGHT + 12.0)])
+        .anchor(Align2::LEFT_TOP, [16.0, HEADER_HEIGHT + 8.0])
         .show(ctx, |ui| {
             let acc = &app.account;
             if acc.is_developer() {
@@ -150,11 +207,12 @@ fn account_panel(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+
 /// A vertical, card-shaped tile for a game, with its value centred underneath.
-fn tile(ui: &mut Ui, game: Game, value: &Value) -> egui::Response {
+fn tile(ui: &mut Ui, game: Game, value: &Value, width: f32) -> egui::Response {
     ui.vertical(|ui| {
-        ui.set_width(TILE_WIDTH);
-        let (rect, resp) = ui.allocate_exact_size(vec2(TILE_WIDTH, TILE_WIDTH / CARD_ASPECT), Sense::click());
+        ui.set_width(width);
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, width / CARD_ASPECT), Sense::click());
         let resp = resp
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(format!("Open {}", game.name()));
@@ -168,10 +226,10 @@ fn tile(ui: &mut Ui, game: Game, value: &Value) -> egui::Response {
             Color32::from_black_alpha(80),
         );
         p.text(
-            rect.center() - vec2(0.0, 26.0),
+            rect.center() - vec2(0.0, width * 0.12),
             Align2::CENTER_CENTER,
             game.short_name(),
-            widgets::bold_font(40.0),
+            widgets::bold_font((width * 0.22).max(28.0)),
             Color32::WHITE,
         );
         p.text(band.center(), Align2::CENTER_CENTER, game.name(), FontId::proportional(13.0), Color32::WHITE);
